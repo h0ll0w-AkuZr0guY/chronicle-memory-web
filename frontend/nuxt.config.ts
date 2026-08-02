@@ -4,5 +4,11 @@ export default defineNuxtConfig({
   devtools: { enabled: true },
   experimental: { typedPages: false },
   app: { baseURL: process.env.NUXT_APP_BASE_URL || '/' },
-  runtimeConfig: { public: { apiBase: process.env.NUXT_PUBLIC_API_BASE || '' } }
+  runtimeConfig: {
+    public: {
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || '',
+      demoEmail: process.env.NUXT_PUBLIC_DEMO_EMAIL || '',
+      demoPassword: process.env.NUXT_PUBLIC_DEMO_PASSWORD || '',
+    },
+  }
 })

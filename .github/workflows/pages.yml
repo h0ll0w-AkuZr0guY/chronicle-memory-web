@@ -36,14 +36,16 @@ jobs:
         working-directory: frontend
         env:
           NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/chronicle-memory/
-          NUXT_PUBLIC_API_BASE: ''
+          NUXT_PUBLIC_API_BASE: ${{ secrets.CHRONICLE_PUBLIC_API_BASE }}
+          NUXT_PUBLIC_DEMO_EMAIL: ${{ secrets.CHRONICLE_PUBLIC_DEMO_EMAIL }}
+          NUXT_PUBLIC_DEMO_PASSWORD: ${{ secrets.CHRONICLE_PUBLIC_DEMO_PASSWORD }}
       - run: pnpm install --frozen-lockfile
         working-directory: admin
       - run: pnpm run generate
         working-directory: admin
         env:
           NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/admin/
-          NUXT_PUBLIC_API_BASE: ''
+          NUXT_PUBLIC_API_BASE: ${{ secrets.CHRONICLE_PUBLIC_API_BASE }}
       - run: |
           mkdir -p site/chronicle-memory site/admin
           cp -R landing/. site/
