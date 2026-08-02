@@ -1,0 +1,13 @@
+{
+  "project": "chronicle-memory-web",
+  "version": "0.1.2",
+  "source_repository": "h0ll0w-AkuZr0guY/chronicle-memory",
+  "source_commit": "6475a0193a497badef3ee5f06aa905f4e8f453d4",
+  "generated_at_utc": "2026-08-02T12:48:13Z",
+  "api_mode": "offline-only",
+  "copied_paths": [
+    "frontend/app",
+    "frontend/public/demo",
+    "admin/app"
+  ]
+}

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import html2canvas from 'html2canvas'
 
-type User = { id: string; email: string; display_name: string; role: 'admin' | 'member' }
+type User = { id: string; email: string; display_name: string; role: 'super_admin' | 'admin' | 'operator' | 'member' }
 type Profile = {
   id: string
   display_name: string
@@ -89,6 +89,8 @@ type Narrative = {
 }
 type GraphNode = { id: string; label: string; type: string; weight: number }
 type GraphEdge = { source: string; target: string; label: string }
+type MemoryGroup = { id: string; owner_id: string; name: string; description?: string; people_count: number; member_count: number; created_at: string; updated_at: string }
+type MemoryGroupMember = { id: string; group_id: string; user_id: string; email: string; display_name: string; role: 'viewer' | 'editor' | 'admin'; created_at: string }
 type WorldBook = {
   person: { id: string; display_name: string }
   collections: Collection[]
@@ -103,11 +105,11 @@ type CoachSuggestion = { question: string; rationale: string; action: 'write' | 
 type Coach = { summary: string; suggestions: CoachSuggestion[] }
 type CopilotContext = { title: string; excerpt: string; matched_by: string[] }
 type View = 'wall' | 'timeline' | 'world' | 'settings'
-type SettingsTab = 'search' | 'ai' | 'graph' | 'profile'
+type SettingsTab = 'search' | 'ai' | 'graph' | 'groups' | 'profile'
 
 const config = useRuntimeConfig()
-// Production builds bind to the same-origin private API (/api). The public
-// showcase build intentionally leaves this empty and stays offline-only.
+// Production builds bind to the private HTTPS API. Local development can
+// still override this value with NUXT_PUBLIC_API_BASE.
 const apiBase = ref(String(config.public.apiBase ?? (import.meta.dev ? '/api' : '')))
 const token = ref(import.meta.client ? localStorage.getItem('chronicle-user-token') || '' : '')
 const activeView = ref<View>('wall')
@@ -174,6 +176,14 @@ const previewBlock = ref<Block>()
 const previewScale = ref(1)
 const chatMessage = ref('')
 const chatMessages = ref<Array<{ role: 'user' | 'ai'; text: string; suggested?: string; memory?: CopilotContext[] }>>([])
+const groups = ref<MemoryGroup[]>([])
+const selectedGroupId = ref('')
+const groupMembers = ref<MemoryGroupMember[]>([])
+const groupPeople = ref<Array<{ id: string; display_name: string }>>([])
+const groupNameInput = ref('')
+const groupDescriptionInput = ref('')
+const memberEmailInput = ref('')
+const memberRoleInput = ref<'viewer' | 'editor' | 'admin'>('viewer')
 const zoom = ref(1)
 const panX = ref(0)
 const panY = ref(0)
@@ -265,10 +275,10 @@ function pageKeyForBlock(block: Block) {
   return event ? `day:${event.day_label || event.start_label || '时间待补'}` : 'undated'
 }
 function pageCount(key: string) { return allBlocks.value.filter(block => pageKeyForBlock(block) === key && block.style?.hidden !== 'true').length }
-function connectionFailureMessage(error: any) {
+function connectionFailureMessage(error: any, fallback = '私域记忆服务暂时不可用，请稍后重试或联系管理员。') {
   const detail = error?.data?.detail || error?.response?._data?.detail
   if (typeof detail === 'string') return `后端返回：${detail}`
-  return '私域记忆服务暂时不可用，请稍后重试或联系管理员。'
+  return fallback
 }
 function dateInputFor(offset: number) {
   const date = new Date()
@@ -372,7 +382,69 @@ async function ensureRemoteWorkspace() {
     collections.value = [first]
   }
   await selectCollection(selectedCollectionId.value || collections.value[0]!.id)
-  await Promise.all([refreshWorld(), loadPersonalSettings()])
+  await Promise.all([refreshWorld(), loadPersonalSettings(), loadGroups()])
+}
+async function loadGroups() {
+  if (isOffline.value) return
+  groups.value = await $fetch<MemoryGroup[]>(api('/v1/groups'), { headers: authHeaders() })
+  if (selectedGroupId.value && !groups.value.some(group => group.id === selectedGroupId.value)) selectedGroupId.value = ''
+  if (!selectedGroupId.value && groups.value[0]) await selectGroup(groups.value[0].id)
+}
+async function selectGroup(groupId: string) {
+  selectedGroupId.value = groupId
+  if (isOffline.value) return
+  const [members, people] = await Promise.all([
+    $fetch<MemoryGroupMember[]>(api(`/v1/groups/${groupId}/members`), { headers: authHeaders() }),
+    $fetch<Array<{ id: string; display_name: string }>>(api(`/v1/groups/${groupId}/people`), { headers: authHeaders() }),
+  ])
+  groupMembers.value = members
+  groupPeople.value = people
+}
+async function createGroup() {
+  if (isOffline.value || !groupNameInput.value.trim()) {
+    notice.value = isOffline.value ? '离线展台只展示家庭组界面，连接私域后即可创建。' : '请先填写家庭组名称。'
+    return
+  }
+  busy.value = true
+  try {
+    const group = await $fetch<MemoryGroup>(api('/v1/groups'), { method: 'POST', headers: authHeaders(), body: { name: groupNameInput.value.trim(), description: groupDescriptionInput.value.trim() || null } })
+    groups.value = [group, ...groups.value]
+    groupNameInput.value = ''; groupDescriptionInput.value = ''
+    await selectGroup(group.id)
+    notice.value = '家庭组已创建。你可以按邮箱添加成员，再选择共享哪些记忆空间。'
+  } catch (error: any) { notice.value = connectionFailureMessage(error, '家庭组创建失败。') } finally { busy.value = false }
+}
+async function addGroupMember() {
+  if (isOffline.value || !selectedGroupId.value || !memberEmailInput.value.trim()) return
+  busy.value = true
+  try {
+    const member = await $fetch<MemoryGroupMember>(api(`/v1/groups/${selectedGroupId.value}/members`), { method: 'POST', headers: authHeaders(), body: { email: memberEmailInput.value.trim(), role: memberRoleInput.value } })
+    groupMembers.value = [...groupMembers.value.filter(item => item.id !== member.id), member]
+    memberEmailInput.value = ''
+    notice.value = '成员权限已保存。'
+  } catch (error: any) { notice.value = connectionFailureMessage(error, '成员添加失败，请确认对方已注册。') } finally { busy.value = false }
+}
+async function shareCurrentPerson() {
+  if (isOffline.value || !selectedGroupId.value || !personId.value) return
+  try {
+    await $fetch(api(`/v1/groups/${selectedGroupId.value}/people/${personId.value}`), { method: 'POST', headers: authHeaders() })
+    await selectGroup(selectedGroupId.value)
+    notice.value = '当前记忆空间已加入家庭组。'
+  } catch (error: any) { notice.value = connectionFailureMessage(error, '共享记忆空间失败。') }
+}
+async function revokeGroupPerson(person: { id: string; display_name: string }) {
+  if (isOffline.value || !selectedGroupId.value || !confirm(`从家庭组撤销“${person.display_name}”？`)) return
+  await $fetch(api(`/v1/groups/${selectedGroupId.value}/people/${person.id}`), { method: 'DELETE', headers: authHeaders() })
+  groupPeople.value = groupPeople.value.filter(item => item.id !== person.id)
+  notice.value = '共享记忆空间已撤销。'
+}
+async function removeGroupMember(member: MemoryGroupMember) {
+  if (isOffline.value || !selectedGroupId.value || !confirm(`移除成员 ${member.email}？`)) return
+  try {
+    await $fetch(api(`/v1/groups/${selectedGroupId.value}/members/${member.id}`), { method: 'DELETE', headers: authHeaders() })
+    groupMembers.value = groupMembers.value.filter(item => item.id !== member.id)
+    notice.value = '成员已撤销访问。'
+  } catch (error: any) { notice.value = connectionFailureMessage(error, '成员撤销失败。') }
 }
 async function loadPersonalSettings() {
   profile.value = await $fetch<Profile>(api('/v1/profile'), { headers: authHeaders() })
@@ -382,7 +454,14 @@ async function loadPersonalSettings() {
 }
 async function loadIdentity() {
   currentUser.value = await $fetch<User>(api('/v1/auth/me'), { headers: authHeaders() })
-  await ensureRemoteWorkspace()
+  // A valid token is enough to enter the app. A slow workspace/profile call
+  // must not turn a successful login into a generic login error on mobile.
+  try {
+    await ensureRemoteWorkspace()
+  } catch (error) {
+    notice.value = connectionFailureMessage(error, '登录成功，但私人记忆尚未完成同步。请稍后刷新。')
+    return
+  }
   if (import.meta.client) window.scrollTo({ top: 0 })
   notice.value = '已同步你的私人记忆空间。'
 }
@@ -1253,7 +1332,7 @@ function scrollWorld(id: string) {
       </div>
       <Transition name="menu">
         <aside v-if="showProfileMenu" class="profile-menu">
-          <header><span>{{ (currentUser?.display_name || '我').slice(0, 1) }}</span><div><strong>{{ currentUser?.display_name }}</strong><small>{{ currentUser?.role === 'admin' ? '管理员' : '成员' }}</small></div></header>
+          <header><span>{{ (currentUser?.display_name || '我').slice(0, 1) }}</span><div><strong>{{ currentUser?.display_name }}</strong><small>{{ currentUser?.role === 'super_admin' ? '超级管理员' : currentUser?.role === 'admin' ? '管理员' : currentUser?.role === 'operator' ? '运营员' : '成员' }}</small></div></header>
           <button @click="goToSettings('profile')"><span>◎</span><div><strong>个人中心</strong><small>资料、隐私与账户</small></div></button>
           <button @click="goToSettings('ai')"><span>✦</span><div><strong>个人 AI</strong><small>{{ aiProfile.has_api_key ? `${aiProfile.provider} · 已连接` : '尚未配置模型' }}</small></div></button>
           <button class="danger-link" @click="confirmLogout=true;showProfileMenu=false"><span>⇥</span><div><strong>退出登录</strong><small>仅退出当前账户</small></div></button>
@@ -1445,7 +1524,7 @@ function scrollWorld(id: string) {
 
       <section v-else class="content-view engine-view">
         <header class="section-heading"><div><p class="eyebrow">MEMORY ENGINE</p><h1>记忆引擎</h1><p>配置自己的模型、检索证据、维护人物设定，并在知识图谱中理解生活里的连接。</p></div></header>
-        <nav class="engine-tabs"><button :class="{active:settingsTab==='search'}" @click="settingsTab='search'">⌕ 记忆检索</button><button :class="{active:settingsTab==='ai'}" @click="settingsTab='ai'">✦ AI 配置</button><button :class="{active:settingsTab==='graph'}" @click="settingsTab='graph'">⌘ 知识图谱</button><button :class="{active:settingsTab==='profile'}" @click="settingsTab='profile'">◎ 个人中心</button></nav>
+        <nav class="engine-tabs"><button :class="{active:settingsTab==='search'}" @click="settingsTab='search'">⌕ 记忆检索</button><button :class="{active:settingsTab==='ai'}" @click="settingsTab='ai'">✦ AI 配置</button><button :class="{active:settingsTab==='graph'}" @click="settingsTab='graph'">⌘ 知识图谱</button><button :class="{active:settingsTab==='groups'}" @click="settingsTab='groups'">♧ 家庭组</button><button :class="{active:settingsTab==='profile'}" @click="settingsTab='profile'">◎ 个人中心</button></nav>
 
         <section v-if="settingsTab==='search'" class="engine-panel search-panel">
           <div class="engine-intro"><small>HYBRID RETRIEVAL</small><h2>问问你的记忆</h2><p>向量、关键词、时间与实体共同召回，再用 MMR 保留不同来源的片段。</p></div>
@@ -1480,6 +1559,25 @@ function scrollWorld(id: string) {
               </g>
             </svg>
             <div v-if="!graphLayout.nodes.length" class="empty-state"><h3>知识图谱还没有节点</h3><p>新增几段包含人物、地点或作品的记忆后再来看。</p></div>
+          </div>
+        </section>
+
+        <section v-else-if="settingsTab==='groups'" class="engine-panel groups-panel">
+          <div class="engine-intro"><small>FAMILY MEMORY GROUPS</small><h2>把记忆交给可信的人</h2><p>家庭组共享的是明确的记忆空间边界。成员权限可以随时撤销，撤销后立即失去共享空间的媒体、检索与导出权限。</p></div>
+          <div class="groups-create form-grid">
+            <label>家庭组名称<input v-model="groupNameInput" placeholder="例如：我们家的相册"></label>
+            <label>描述<input v-model="groupDescriptionInput" placeholder="共享范围和使用约定"></label>
+            <button class="primary-action" :disabled="busy" @click="createGroup">创建家庭组</button>
+          </div>
+          <div v-if="!groups.length" class="empty-state compact"><h3>{{ isOffline ? '离线展台已保留家庭组入口' : '还没有家庭组' }}</h3><p>{{ isOffline ? '连接私域后即可创建家庭组、邀请成员并共享当前记忆空间。' : '创建后可以按邮箱邀请家人或朋友。' }}</p></div>
+          <div v-else class="groups-layout">
+            <aside class="group-list"><button v-for="group in groups" :key="group.id" :class="{active:selectedGroupId===group.id}" @click="selectGroup(group.id)"><strong>{{ group.name }}</strong><small>{{ group.member_count }} 位成员 · {{ group.people_count }} 个记忆空间</small></button></aside>
+            <div class="group-detail" v-if="groups.find(group => group.id === selectedGroupId)">
+              <header><div><small>GROUP ACCESS</small><h3>{{ groups.find(group => group.id === selectedGroupId)?.name }}</h3></div><span>共享范围可撤销</span></header>
+              <div class="group-invite form-grid"><input v-model="memberEmailInput" type="email" placeholder="对方注册邮箱"><select v-model="memberRoleInput"><option value="viewer">查看者</option><option value="editor">编辑者</option><option value="admin">组管理员</option></select><button class="primary-action" :disabled="busy" @click="addGroupMember">保存成员权限</button></div>
+              <div class="group-section"><h4>成员</h4><article v-for="member in groupMembers" :key="member.id"><div><strong>{{ member.display_name }}</strong><small>{{ member.email }} · {{ member.role }}</small></div><button v-if="member.user_id!==currentUser?.id" class="soft-action" @click="removeGroupMember(member)">撤销</button></article></div>
+              <div class="group-section"><header><h4>共享记忆空间</h4><button class="soft-action" @click="shareCurrentPerson">共享当前空间</button></header><article v-for="person in groupPeople" :key="person.id"><span>{{ person.display_name }}</span><button class="soft-action" @click="revokeGroupPerson(person)">撤销共享</button></article><p v-if="!groupPeople.length" class="muted">尚未共享任何记忆空间。</p></div>
+            </div>
           </div>
         </section>
 
@@ -1573,4 +1671,41 @@ function scrollWorld(id: string) {
   .coach-ribbon,.page-tabs,.page-stylebar,.reel-track,.world-line,.engine-tabs{scrollbar-width:none}
   .coach-ribbon::-webkit-scrollbar,.page-tabs::-webkit-scrollbar,.page-stylebar::-webkit-scrollbar,.reel-track::-webkit-scrollbar,.world-line::-webkit-scrollbar,.engine-tabs::-webkit-scrollbar{display:none}
 }
+/* Tablet landscape: keep desktop density without exposing page-level
+   horizontal scrolling from desktop minimums inside a WebView. */
+html,body,#\#__nuxt{width:100%;max-width:100%;overflow-x:hidden}
+.application{width:100%;max-width:100%;overflow-x:clip}
+.app-shell{width:min(1480px,calc(100% - 32px));max-width:100%}
+@media (min-width:821px) and (max-width:1200px) and (orientation:landscape){
+  .global-header{grid-template-columns:minmax(170px,1fr) auto minmax(170px,1fr);gap:12px;padding-inline:16px}
+  .global-nav button{padding-inline:9px}
+  .header-actions{min-width:0}
+  .share-action b,.user-action div{display:none}
+  .app-shell{width:calc(100% - 28px);padding-top:22px}
+  .composer-meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .media-staging{grid-template-columns:auto minmax(0,1fr) auto}
+  .memory-coach{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .memory-coach>div{grid-column:1/-1}
+  .world-shell{grid-template-columns:210px minmax(0,1fr);gap:16px}
+  .page-heading h1,.section-heading h1{font-size:clamp(2.5rem,5vw,4rem)}
+}
+/* WebView/mobile hardening: long titles and provider URLs must wrap inside
+   their card instead of widening the page. */
+html,body,#\#__nuxt,.application,.global-header,.app-shell,.content-view,.wall-view{min-width:0;max-width:100%}
+button,input,select,textarea{max-width:100%;min-width:0}
+button,small,strong,h1,h2,h3,p,span,blockquote{overflow-wrap:anywhere}
+.collection-list,.page-tabs,.page-stylebar,.reel-track,.assistant-strip,.sticker-strip,.chat-log,.search-results{min-width:0}
+.memory-block,.block-content,.block-content-inner,.block-media{min-width:0;max-width:100%;overflow:hidden}
+.block-content-inner{word-break:break-word}
+@media (max-width:820px){
+  .auth-panel{width:min(520px,calc(100% - 24px));min-width:0}
+  .global-header,.global-nav,.header-actions{min-width:0}
+  .page-heading>div:first-child{min-width:0;flex:1}
+  .page-heading-actions{flex:0 0 auto}
+  .composer,.chat-drawer,.editor-float{max-width:100vw}
+  .chat-log article{width:100%;max-width:100%}
+  .connection-card>div:last-child,.danger-zone>div{min-width:0;max-width:100%}
+.graph-canvas{max-width:100%;overflow:hidden}
+}
+.groups-create{align-items:end}.groups-create>button{justify-self:start}.groups-layout{display:grid;grid-template-columns:minmax(180px,.38fr) 1fr;gap:16px}.group-list{display:grid;align-content:start;gap:7px}.group-list button{display:grid;gap:4px;border:1px solid #ded2c1;border-radius:14px;padding:13px;background:#fff;color:#50655b;text-align:left;cursor:pointer}.group-list button.active{border-color:#285746;background:#e9f1e9;color:#285746}.group-list small,.group-detail small{color:#81786c;font-size:.72rem}.group-detail{display:grid;gap:14px;padding:17px;border:1px solid #ded2c1;border-radius:18px;background:#fffefa}.group-detail>header,.group-section>header{display:flex;justify-content:space-between;gap:12px;align-items:center}.group-detail>header h3{margin:5px 0 0;font:700 1.35rem 'Noto Serif SC'}.group-detail>header>span{color:#8a765c;font-size:.75rem}.group-invite{align-items:end}.group-invite>button{justify-self:start}.group-section{display:grid;gap:8px}.group-section h4{margin:0;font-size:.9rem}.group-section article{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 12px;border:1px solid #ebe2d6;border-radius:12px;background:#faf6ee}.group-section article strong,.group-section article small{display:block}.group-section article small{margin-top:3px}.muted{margin:0;color:#8b8378;font-size:.78rem}@media(max-width:820px){.groups-layout{grid-template-columns:1fr}.groups-create,.group-invite{grid-template-columns:1fr}.groups-create>button,.group-invite>button{width:100%}}
 </style>
