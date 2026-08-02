@@ -4,6 +4,17 @@
 
 这里展示 Chronicle Memory 的产品语言与交互方式：可分页的照片手账、自由画布、事件时间线、世界书、知识图谱、家庭组入口和独立管理端。真实记忆服务运行在私域后端，公开仓库不会读取或保存任何用户数据。
 
+> 当前状态：`v0.1.2` 脱敏离线展台。该仓库是私有仓库发布脚本的产物，不承担真实账户、记忆同步或 API 服务。
+
+## 导航
+
+- [在线页面](#在线页面)
+- [公开边界](#公开边界)
+- [本地运行](#本地运行)
+- [目录规范](#目录规范)
+- [与私有仓库同步](#与私有仓库同步)
+- [验收重点](#验收重点)
+
 ## 在线页面
 
 - 作品集首页：<https://h0ll0w-akuzr0guy.github.io/chronicle-memory-web/>
@@ -11,6 +22,7 @@
 - 离线管理端：<https://h0ll0w-akuzr0guy.github.io/chronicle-memory-web/admin/>
 - 真实私域用户端：<https://akuzr0guy.space/chronicle-memory/>
 - 真实私域管理端：<https://akuzr0guy.space/admin/>
+- 当前公开 Release：[v0.1.2](https://github.com/h0ll0w-AkuZr0guY/chronicle-memory-web/releases/tag/v0.1.2)
 
 `akuzr0guy.space` 首页由独立的个人主页项目提供，Chronicle 通过卡片索引进入；本仓库的 GitHub Pages 用于公开演示和版本验收。
 
@@ -30,6 +42,10 @@
 - 任何可访问真实记忆库的后端地址
 
 公开页面将 `NUXT_PUBLIC_API_BASE` 固定为空，因此按钮只操作浏览器内的演示数据。它可以用于视觉、响应式和交互回归，不代表生产权限或真实数据同步。
+
+## 展示验收契约
+
+每个公开版本必须能从 `PUBLIC-SNAPSHOT.json` 追溯到私有 commit，并同时满足：页面可从 GitHub Pages 直接打开、Network 面板无私域 API 请求、桌面/手机/平板无横向溢出、演示图片和交互不依赖服务器数据库。真实登录、权限、检索和家庭组流程只在私有云端验收。
 
 ## 本地运行
 
