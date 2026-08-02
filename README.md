@@ -20,11 +20,9 @@
 - 作品集首页：<https://h0ll0w-akuzr0guy.github.io/chronicle-memory-web/>
 - Chronicle 离线展台：<https://h0ll0w-akuzr0guy.github.io/chronicle-memory-web/chronicle-memory/>
 - 离线管理端：<https://h0ll0w-akuzr0guy.github.io/chronicle-memory-web/admin/>
-- 真实私域用户端：<https://akuzr0guy.space/chronicle-memory/>
-- 真实私域管理端：<https://akuzr0guy.space/admin/>
 - 当前公开 Release：[v0.1.2](https://github.com/h0ll0w-AkuZr0guY/chronicle-memory-web/releases/tag/v0.1.2)
 
-`akuzr0guy.space` 首页由独立的个人主页项目提供，Chronicle 通过卡片索引进入；本仓库的 GitHub Pages 用于公开演示和版本验收。
+`akuzr0guy.space` 首页由独立的个人主页项目提供，Chronicle 通过卡片索引进入；私域用户端和管理端入口只在私有仓库交付文档中维护。本仓库的 GitHub Pages 用于公开演示和版本验收。
 
 ## 公开边界
 
