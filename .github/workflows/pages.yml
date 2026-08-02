@@ -51,7 +51,7 @@ jobs:
           cp -R landing/. site/
           cp -R frontend/.output/public/. site/chronicle-memory/
           cp -R admin/.output/public/. site/admin/
-          printf 'Chronicle Memory public offline showcase\n' > site/chronicle-memory/SHOWCASE-MODE.txt
+          printf 'Chronicle Memory public backend practice\n' > site/chronicle-memory/SHOWCASE-MODE.txt
           touch site/.nojekyll
       - uses: actions/upload-pages-artifact@v5
         with:
