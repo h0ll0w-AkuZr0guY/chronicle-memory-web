@@ -1,4 +1,4 @@
-name: Deploy Chronicle showcase
+name: Build Chronicle Memory showcase
 
 on:
   push:
@@ -27,7 +27,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache-dependency-path: |
+            frontend/pnpm-lock.yaml
+            admin/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: frontend
       - run: pnpm run generate
@@ -35,10 +37,19 @@ jobs:
         env:
           NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/chronicle-memory/
           NUXT_PUBLIC_API_BASE: ''
+      - run: pnpm install --frozen-lockfile
+        working-directory: admin
+      - run: pnpm run generate
+        working-directory: admin
+        env:
+          NUXT_APP_BASE_URL: /${{ github.event.repository.name }}/admin/
+          NUXT_PUBLIC_API_BASE: ''
       - run: |
-          mkdir -p site/chronicle-memory
+          mkdir -p site/chronicle-memory site/admin
           cp -R landing/. site/
           cp -R frontend/.output/public/. site/chronicle-memory/
+          cp -R admin/.output/public/. site/admin/
+          printf 'Chronicle Memory public offline showcase\n' > site/chronicle-memory/SHOWCASE-MODE.txt
           touch site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
