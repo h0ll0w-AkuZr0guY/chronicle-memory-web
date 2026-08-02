@@ -111,6 +111,8 @@ const config = useRuntimeConfig()
 // Production builds bind to the private HTTPS API. Local development can
 // still override this value with NUXT_PUBLIC_API_BASE.
 const apiBase = ref(String(config.public.apiBase ?? (import.meta.dev ? '/api' : '')))
+const demoEmail = String(config.public.demoEmail ?? '')
+const demoPassword = String(config.public.demoPassword ?? '')
 const token = ref(import.meta.client ? localStorage.getItem('chronicle-user-token') || '' : '')
 const activeView = ref<View>('wall')
 const settingsTab = ref<SettingsTab>('search')
@@ -591,6 +593,11 @@ async function initialize() {
   }
 }
 onMounted(() => {
+  if (!token.value && demoEmail && demoPassword) {
+    authEmail.value = demoEmail
+    authPassword.value = demoPassword
+    notice.value = '公开体验账号已填入。点击登录即可试用真实后端，注册入口仍可创建自己的账户。'
+  }
   initialize()
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   document.addEventListener('pointerdown', closeFloatingEditor)
