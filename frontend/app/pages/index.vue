@@ -104,6 +104,16 @@ type StagedMedia = { file: File; url: string; name: string }
 type CoachSuggestion = { question: string; rationale: string; action: 'write' | 'photo' | 'time' | 'place' | 'link' }
 type Coach = { summary: string; suggestions: CoachSuggestion[] }
 type CopilotContext = { title: string; excerpt: string; matched_by: string[] }
+type MemorySegmentPreview = {
+  segment_key: string
+  text: string
+  source_start: number
+  source_end: number
+  start_label?: string
+  temporal_precision: 'exact' | 'month' | 'season' | 'relative' | 'unknown'
+  confidence: number
+  needs_confirmation: boolean
+}
 type View = 'wall' | 'timeline' | 'world' | 'settings'
 type SettingsTab = 'search' | 'ai' | 'graph' | 'groups' | 'profile'
 
@@ -161,6 +171,9 @@ const placeLabel = ref('')
 const titleHint = ref('')
 const photoCaption = ref('')
 const stagedMedia = ref<StagedMedia[]>([])
+const segmentPreview = ref<MemorySegmentPreview[]>([])
+const segmentSelection = ref<boolean[]>([])
+const showSegmentConfirm = ref(false)
 const layoutPreset = ref<'free' | 'grid2' | 'grid3' | 'polaroid'>('free')
 const stickerChoice = ref('✨')
 const newCollectionTitle = ref('')
@@ -749,6 +762,57 @@ async function enrichMetadata() {
     notice.value = result.explanation
   } catch {
     notice.value = 'AI 暂时无法补齐线索，原始文字不会受到影响。'
+  } finally {
+    busy.value = false
+  }
+}
+async function previewMemorySegments() {
+  if (isOffline.value || !personId.value) {
+    notice.value = '连接后端并登录后，才能确认多日叙述的时间线分段。'
+    return
+  }
+  if (!message.value.trim()) {
+    notice.value = '先写下一段可能跨越多天的叙述。'
+    return
+  }
+  busy.value = true
+  try {
+    segmentPreview.value = await $fetch<MemorySegmentPreview[]>(api(`/v1/people/${personId.value}/memory/segment-preview`), {
+      method: 'POST',
+      headers: authHeaders(),
+      body: { content: message.value, base_label: occurredAt.value || null },
+    })
+    segmentSelection.value = segmentPreview.value.map(() => true)
+    showSegmentConfirm.value = true
+    notice.value = segmentPreview.value.length ? '请检查原文区间，再确认写入时间线。' : '没有识别到明确日期，原文暂不自动拆分。'
+  } catch {
+    notice.value = '分段预览失败，原始文字没有被修改。'
+  } finally {
+    busy.value = false
+  }
+}
+async function confirmMemorySegments() {
+  const indexes = segmentSelection.value.map((selected, index) => selected ? index : -1).filter(index => index >= 0)
+  if (!indexes.length || !personId.value) {
+    notice.value = '至少选择一个原文片段。'
+    return
+  }
+  busy.value = true
+  try {
+    const result = await $fetch<{ segment_count: number }>(api(`/v1/people/${personId.value}/memory/segments/confirm`), {
+      method: 'POST',
+      headers: authHeaders(),
+      body: { content: message.value, base_label: occurredAt.value || null, segment_indexes: indexes },
+    })
+    showSegmentConfirm.value = false
+    segmentPreview.value = []
+    segmentSelection.value = []
+    const timeline = await $fetch<EventItem[]>(api(`/v1/people/${personId.value}/timeline`), { headers: authHeaders() })
+    if (detail.value) detail.value.events = timeline
+    await refreshWorld()
+    notice.value = `已确认 ${result.segment_count} 个时间线片段；原始叙述仍作为一份证据保存。`
+  } catch (error: any) {
+    notice.value = error?.data?.detail || '确认失败，原始文字仍然安全保留。'
   } finally {
     busy.value = false
   }
@@ -1388,7 +1452,19 @@ function scrollWorld(id: string) {
               <label>发生在哪<input v-model="placeLabel" placeholder="地点会进入事件关系"></label>
               <label>投放页面<select v-model="selectedPageKey"><option v-for="page in pages" :key="page.id" :value="page.page_key">{{ page.title }}</option></select></label>
             </div>
-            <div class="assistant-strip"><button @click="parseRelativeDate">◷ 解析今天 / 昨天</button><button :disabled="busy" @click="enrichMetadata">✦ AI 只补填写线索</button><span>{{ titleHint ? `建议标题：${titleHint}` : '手动填写与 AI 提取相互独立' }}</span></div>
+            <div class="assistant-strip"><button @click="parseRelativeDate">◷ 解析今天 / 昨天</button><button :disabled="busy" @click="enrichMetadata">✦ AI 只补填写线索</button><button class="segment-action" :disabled="busy" @click="previewMemorySegments">⌁ 预览时间线分段</button><span>{{ titleHint ? `建议标题：${titleHint}` : '手动填写与 AI 提取相互独立' }}</span></div>
+            <Transition name="reveal">
+              <section v-if="showSegmentConfirm" class="segment-confirm-panel">
+                <header><div><small>SEGMENT REVIEW</small><strong>确认多日叙述如何进入时间线</strong></div><button @click="showSegmentConfirm=false">×</button></header>
+                <p>只展示原文区间，不替你补写事件。确认后会保留整段原始材料，并把选中的片段写成待审核事件。</p>
+                <label v-for="(segment,index) in segmentPreview" :key="segment.segment_key" class="segment-option">
+                  <input v-model="segmentSelection[index]" type="checkbox">
+                  <span><b>{{ segment.start_label || '时间待确认' }}</b><small>{{ segment.text }}</small></span>
+                  <em>{{ Math.round(segment.confidence * 100) }}%</em>
+                </label>
+                <footer><button class="soft-action" @click="showSegmentConfirm=false">稍后确认</button><button class="primary-action" :disabled="busy" @click="confirmMemorySegments">确认写入时间线</button></footer>
+              </section>
+            </Transition>
             <div class="media-staging">
               <div><strong>照片预备区</strong><small>最多 6 张，确认布局后再和文字一起提交</small></div>
               <button @click="openPhotoPicker">▧ 选择照片</button>
@@ -1631,6 +1707,7 @@ function scrollWorld(id: string) {
 
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Noto+Serif+SC:wght@500;600;700;900&family=Source+Han+Sans+SC:wght@400;500;600;700&display=swap');
+.segment-action{border-color:#c6a66f!important;color:#875f32!important;background:#fff8e9!important}.segment-confirm-panel{display:grid;gap:10px;margin:10px 0;padding:14px;border:1px solid #d9c8ae;border-radius:17px;background:linear-gradient(120deg,#fffaf0,#eef5ef)}.segment-confirm-panel header{display:flex;justify-content:space-between;align-items:start}.segment-confirm-panel header small{display:block;font:.55rem 'DM Mono';letter-spacing:.12em;color:#a17045}.segment-confirm-panel header strong{display:block;margin-top:3px;font:700 .98rem 'Noto Serif SC'}.segment-confirm-panel header button{border:0;background:transparent;font-size:1.2rem;cursor:pointer}.segment-confirm-panel>p{margin:0;color:#77756b;font-size:.72rem;line-height:1.6}.segment-option{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:start;padding:9px 10px;border:1px solid #e3d8c7;border-radius:12px;background:#fffdf9;cursor:pointer}.segment-option input{margin-top:4px;accent-color:#285746}.segment-option span{min-width:0}.segment-option b,.segment-option small{display:block}.segment-option b{color:#7d603e;font-size:.72rem}.segment-option small{margin-top:3px;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;color:#4f5a51;line-height:1.5}.segment-option em{color:#a17145;font:600 .65rem 'DM Mono';font-style:normal}.segment-confirm-panel footer{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 :root{--ink:#20382f;--forest:#285746;--deep:#17392d;--paper:#fffdf8;--cream:#f5f1e8;--line:#ded2c0;--gold:#bd8750;--muted:#72776e;--shadow:0 20px 55px #24362b18;color:var(--ink);background:var(--cream);font-family:'Source Han Sans SC',sans-serif}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;min-height:100vh;background:radial-gradient(circle at 3% 12%,#dcece356 0 10%,transparent 28%),radial-gradient(circle at 96% 4%,#f2d89a42 0 9%,transparent 27%),var(--cream)}button,input,textarea,select{font:inherit}button{color:inherit}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #d9b56b66;outline-offset:2px}.eyebrow{margin:0;font:500 .68rem 'DM Mono';letter-spacing:.14em;color:#9b7045}.notice{margin:14px 2px;color:#756a5b;font-size:.86rem;line-height:1.6}.primary-action,.soft-action,.ghost-action,.danger-action{border:0;border-radius:999px;padding:11px 16px;cursor:pointer;font-weight:700;transition:background .2s ease,box-shadow .2s ease,opacity .2s ease}.primary-action{background:var(--forest);color:#fff;box-shadow:0 8px 18px #183c2e28}.primary-action:hover{background:var(--deep);box-shadow:0 12px 25px #183c2e34}.soft-action{background:#efe7d8;color:#4d6458}.ghost-action{background:#ffffff80;color:#2b684f;border:1px solid #d8cbb8}.danger-action{background:#99493e;color:#fff}button:disabled{opacity:.5;cursor:not-allowed}
 
