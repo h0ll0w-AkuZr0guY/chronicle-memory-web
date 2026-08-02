@@ -1,0 +1,28 @@
+{
+  "name": "chronicle-memory-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "typecheck": "nuxt typecheck",
+    "android:sync": "pnpm run generate && cap sync android",
+    "android:apk": "pnpm run android:sync && cd android && gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.4.2",
+    "@capacitor/core": "8.4.2",
+    "@capacitor/geolocation": "^8",
+    "html2canvas": "^1.4.1",
+    "nuxt": "^4.5.0",
+    "vue": "^3.5.0",
+    "vue-router": "^5.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.4.2",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.7"
+  }
+}

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="desk" x2="1" y2="1"><stop stop-color="#314b43"/><stop offset="1" stop-color="#102b27"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="18" stdDeviation="18" flood-opacity=".35"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#desk)"/>
+  <g opacity=".18" stroke="#fff" stroke-width="2"><path d="M0 130h1200M0 260h1200M0 390h1200M0 520h1200M0 650h1200"/></g>
+  <g transform="translate(135 150) rotate(-4 465 245)" filter="url(#shadow)">
+    <path d="M24 0h882a24 24 0 0 1 24 24v442a24 24 0 0 1-24 24H24A24 24 0 0 1 0 466V24A24 24 0 0 1 24 0Z" fill="#f2dfb6"/>
+    <path d="M675 0v490" stroke="#b98355" stroke-width="4" stroke-dasharray="15 13"/>
+    <circle cx="0" cy="245" r="25" fill="#27443c"/><circle cx="930" cy="245" r="25" fill="#1d3731"/>
+    <text x="55" y="84" fill="#23473d" font-family="monospace" font-size="30" letter-spacing="5">CHRONICLE RAILWAY</text>
+    <text x="55" y="180" fill="#203d35" font-family="serif" font-size="72" font-weight="700">湖畔  →  回家</text>
+    <text x="58" y="247" fill="#8a5b38" font-family="monospace" font-size="28">2026 / 07 / 20  ·  18:32</text>
+    <text x="58" y="355" fill="#203d35" font-family="serif" font-size="34">把还没写完的夏天，夹在这一页。</text>
+    <g fill="#274a3f"><rect x="720" y="55" width="22" height="300"/><rect x="758" y="55" width="10" height="300"/><rect x="786" y="55" width="30" height="300"/><rect x="832" y="55" width="14" height="300"/><rect x="862" y="55" width="28" height="300"/></g>
+    <text x="720" y="415" fill="#835b3d" font-family="monospace" font-size="22">SEAT 07A</text>
+  </g>
+</svg>

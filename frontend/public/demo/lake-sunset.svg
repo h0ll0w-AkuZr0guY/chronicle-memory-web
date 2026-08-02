@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1">
+      <stop stop-color="#617c91"/>
+      <stop offset=".5" stop-color="#e5a86f"/>
+      <stop offset="1" stop-color="#f2d3a1"/>
+    </linearGradient>
+    <linearGradient id="water" x2="0" y2="1">
+      <stop stop-color="#597a80"/>
+      <stop offset="1" stop-color="#173e42"/>
+    </linearGradient>
+    <linearGradient id="glow" x2="0" y2="1">
+      <stop stop-color="#fff1be" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#e8a75d" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="430" fill="url(#sky)"/>
+  <circle cx="830" cy="270" r="76" fill="#ffe4a7" opacity=".9"/>
+  <path d="M0 390 170 320 300 370 430 280 570 365 720 300 870 360 1010 280 1200 350V460H0Z" fill="#294d4b" opacity=".72"/>
+  <rect y="430" width="1200" height="370" fill="url(#water)"/>
+  <path d="M740 430h185l120 370H625Z" fill="url(#glow)" opacity=".55"/>
+  <g stroke="#f6c37b" stroke-width="7" opacity=".45">
+    <path d="M650 500h290M610 570h390M570 650h480M520 740h590"/>
+  </g>
+  <path d="M0 680c190-85 300-70 470 10S800 780 1200 620v180H0Z" fill="#102f2d"/>
+  <g fill="#112e2c">
+    <path d="m100 680 55-205 46 205Z"/><path d="m170 680 42-150 37 150Z"/>
+    <path d="m1070 655 48-190 52 190Z"/><path d="m1010 675 36-130 38 130Z"/>
+  </g>
+  <text x="60" y="85" fill="#fff8e8" font-family="serif" font-size="34" letter-spacing="8">SUMMER LAKE · 18:47</text>
+</svg>

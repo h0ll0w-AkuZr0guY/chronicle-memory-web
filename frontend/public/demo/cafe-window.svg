@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800">
+  <defs>
+    <linearGradient id="room" x2="1" y2="1">
+      <stop stop-color="#5a493e"/><stop offset="1" stop-color="#211f1d"/>
+    </linearGradient>
+    <linearGradient id="rain" x2="0" y2="1">
+      <stop stop-color="#a8c3c3"/><stop offset="1" stop-color="#405f62"/>
+    </linearGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="9"/></filter>
+  </defs>
+  <rect width="1200" height="800" fill="url(#room)"/>
+  <rect x="95" y="70" width="710" height="540" rx="8" fill="#1d2727"/>
+  <rect x="120" y="95" width="315" height="490" fill="url(#rain)"/>
+  <rect x="465" y="95" width="315" height="490" fill="url(#rain)"/>
+  <g fill="#f1d595" opacity=".6" filter="url(#blur)">
+    <circle cx="255" cy="300" r="38"/><circle cx="620" cy="220" r="30"/><circle cx="690" cy="410" r="48"/>
+  </g>
+  <g stroke="#e5f3ef" stroke-width="5" opacity=".45">
+    <path d="m160 120-22 105m96-87-28 150m102-110-24 120m250-170-30 145m105-99-35 170m120-180-29 160"/>
+  </g>
+  <path d="M0 620h1200v180H0Z" fill="#2d211c"/>
+  <ellipse cx="820" cy="695" rx="255" ry="55" fill="#171616" opacity=".55"/>
+  <path d="M690 570h230l-38 154H728Z" fill="#f0e4cc"/>
+  <path d="m725 600 98 5m-105 32 130 8m-138 28 110 6" stroke="#9c7961" stroke-width="7"/>
+  <ellipse cx="1010" cy="600" rx="78" ry="35" fill="#d8c5a7"/>
+  <path d="M950 475h120l-18 126H970Z" fill="#efe2ca"/>
+  <path d="M1070 505q70 10 30 65-15 20-45 13" fill="none" stroke="#efe2ca" stroke-width="18"/>
+  <path d="M955 475h112" stroke="#5f3925" stroke-width="15"/>
+  <text x="70" y="735" fill="#d8bc89" font-family="serif" font-size="33" letter-spacing="7">RAIN LETTERS · OLD STREET</text>
+</svg>
