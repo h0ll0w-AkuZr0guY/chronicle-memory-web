@@ -160,6 +160,7 @@ const showNarrativeWorkbench = ref(false)
 const editingNarrativeId = ref('')
 const narrativeEdit = reactive({ title: '', content: '', status: 'draft' })
 const fileInput = ref<HTMLInputElement>()
+const replaceFileInput = ref<HTMLInputElement>()
 const wall = ref<HTMLElement>()
 const wallStage = ref<HTMLElement>()
 const wallViewport = ref<HTMLElement>()
@@ -204,6 +205,7 @@ const panX = ref(0)
 const panY = ref(0)
 const panning = ref<{ startX: number; startY: number; x: number; y: number }>()
 const reelDragBlockId = ref('')
+const contextMenu = ref<{ block: Block; x: number; y: number }>()
 const isImmersive = ref(false)
 const coach = ref<Coach>()
 const narrativePerspective = ref<'daily' | 'event' | 'stage' | 'world'>('daily')
@@ -254,7 +256,9 @@ function clamp(value: number, min: number, max: number) { return Math.max(min, M
 function mediaUrl(url?: string) { return (url && mediaUrls[url]) || '' }
 function demoAsset(name: string) { return `${config.app.baseURL || '/'}demo/${name}` }
 function cardScale(block: Block) {
-  return clamp(Math.min(block.width / 32, block.height / 26), .56, 1.18)
+  // Keep a small card as a true miniature. The previous lower bound kept the
+  // text at near full size and produced an unusable inner scrollbar.
+  return clamp(Math.min(block.width / 34, block.height / 28), .46, 1)
 }
 function resetCanvasView() {
   zoom.value = 1
@@ -262,7 +266,7 @@ function resetCanvasView() {
   panY.value = 0
 }
 function setZoom(value: number) {
-  zoom.value = clamp(value, .8, 1.8)
+  zoom.value = clamp(value, .7, 1.6)
   if (zoom.value <= 1) {
     panX.value = 0
     panY.value = 0
@@ -272,17 +276,86 @@ function handleCanvasWheel(event: WheelEvent) {
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault()
     setZoom(zoom.value + (event.deltaY < 0 ? .1 : -.1))
-    return
-  }
-  if (zoom.value > 1) {
+  } else if (event.shiftKey && zoom.value > 1) {
+    // Shift + wheel is the deliberate canvas-pan gesture. Plain wheel is
+    // intentionally left to the browser so the page remains readable.
     event.preventDefault()
-    panX.value -= event.deltaX
-    panY.value -= event.deltaY
+    panX.value -= event.deltaY || event.deltaX
   }
 }
 function beginCanvasPan(event: PointerEvent) {
-  if (zoom.value <= 1 || (event.target as HTMLElement).closest('.memory-block,.page-turn,button,input,textarea,select')) return
+  if (zoom.value <= 1 || (event.target as HTMLElement).closest('.memory-block,.page-turn,button,input,textarea,select') || (event.button !== 1 && !event.shiftKey)) return
+  event.preventDefault()
   panning.value = { startX: event.clientX, startY: event.clientY, x: panX.value, y: panY.value }
+}
+function closeCanvasOverlays() {
+  contextMenu.value = undefined
+  selectedBlock.value = undefined
+}
+function openBlockMenu(block: Block, event: MouseEvent) {
+  selectedBlock.value = { ...block, style: { ...block.style } }
+  contextMenu.value = { block, x: clamp(event.clientX, 12, window.innerWidth - 220), y: clamp(event.clientY, 12, window.innerHeight - 280) }
+}
+function raiseBlock(block: Block) {
+  const zIndex = Math.max(1, ...allBlocks.value.map(item => item.z_index)) + 1
+  block.z_index = zIndex
+  void patchBlock(block, { z_index: zIndex })
+}
+function rotateBlock(block: Block, delta: number) {
+  block.rotation = clamp(block.rotation + delta, -20, 20)
+  void patchBlock(block, { rotation: block.rotation })
+}
+async function deleteBlock(block: Block) {
+  if (!confirm(`从这页移除“${block.title || '未命名卡片'}”？原始照片和记忆来源会保留在档案中。`)) return
+  contextMenu.value = undefined
+  if (isOffline.value && detail.value) {
+    detail.value.blocks = detail.value.blocks.filter(item => item.id !== block.id)
+    selectedBlock.value = undefined
+    return
+  }
+  try {
+    await $fetch(api(`/v1/collections/${block.collection_id}/blocks/${block.id}`), { method: 'DELETE', headers: authHeaders() })
+    if (detail.value) detail.value.blocks = detail.value.blocks.filter(item => item.id !== block.id)
+    selectedBlock.value = undefined
+    notice.value = '卡片已从手账页移除，原始材料仍可在记忆档案中追溯。'
+  } catch {
+    notice.value = '移除失败，请稍后重试。'
+  }
+}
+function openReplacePicker() { replaceFileInput.value?.click() }
+async function replaceBlockMedia(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  const block = selectedBlock.value
+  if (!file || !block) return
+  if (replaceFileInput.value) replaceFileInput.value.value = ''
+  if (isOffline.value) {
+    const key = `offline-replaced-${Date.now()}`
+    mediaUrls[key] = URL.createObjectURL(file)
+    block.media_url = key
+    block.body = block.body || file.name
+    await patchBlock(block, { body: block.body })
+    notice.value = '已替换离线预览图片。'
+    return
+  }
+  busy.value = true
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('caption', block.body || block.title || file.name)
+    const updated = await $fetch<Block>(api(`/v1/collections/${block.collection_id}/blocks/${block.id}/replace-media`), { method: 'POST', headers: authHeaders(), body: form })
+    if (updated.media_url) {
+      const blob = await $fetch<Blob>(api(updated.media_url), { headers: authHeaders(), responseType: 'blob' })
+      mediaUrls[updated.media_url] = URL.createObjectURL(blob)
+    }
+    const index = allBlocks.value.findIndex(item => item.id === updated.id)
+    if (index >= 0 && detail.value) detail.value.blocks[index] = updated
+    selectedBlock.value = { ...updated, style: { ...updated.style } }
+    notice.value = '图片已替换；旧照片仍作为可追溯素材保留。'
+  } catch {
+    notice.value = '图片替换失败，请检查文件后重试。'
+  } finally {
+    busy.value = false
+  }
 }
 function pageKeyForBlock(block: Block) {
   if (block.style?.page_key) return block.style.page_key
@@ -517,10 +590,13 @@ function loadOfflineDemo() {
     blocks: [
       { id: 'offline-lake-image', collection_id: collection.id, event_id: events[0]!.id, kind: 'image', title: '风把湖面吹成碎金', body: '到湖边时刚好是蓝调时刻，远处的灯一盏一盏亮起来。', emoji: '🌇', mood: '松弛', tags: ['夏天', '抵达'], style: { page_key: demoPages[1]!.page_key, text_position: 'bottom', frame: 'polaroid' }, media_url: 'demo-lake', place_labels: ['南岸步道'], x: 7, y: 10, width: 43, height: 50, rotation: -2, z_index: 1, created_at: '', updated_at: '' },
       { id: 'offline-note', collection_id: collection.id, event_id: events[0]!.id, kind: 'note', title: '湖边落日散步', body: '风里有晒过草木的味道。我们没有赶路，只沿着水边慢慢走。', emoji: '🌿', mood: '松弛', tags: ['散步', '夏天'], style: { page_key: demoPages[1]!.page_key }, place_labels: ['湖边'], x: 55, y: 14, width: 33, height: 25, rotation: 2, z_index: 2, created_at: '', updated_at: '' },
+      { id: 'offline-arrival-note', collection_id: collection.id, event_id: events[0]!.id, kind: 'note', title: '民宿的第一盏灯', body: '推开窗时看见湖面像被云擦过。阿然说，今晚先什么也别安排。', emoji: '🏠', mood: '安定', tags: ['抵达', '同行'], style: { page_key: demoPages[1]!.page_key }, place_labels: ['湖畔民宿'], x: 15, y: 66, width: 35, height: 24, rotation: 1, z_index: 3, created_at: '', updated_at: '' },
       { id: 'offline-sticker', collection_id: collection.id, event_id: events[0]!.id, kind: 'sticker', title: '留给明天', body: '下次想带一本书，在同一张长椅上读完一章。', emoji: '📚', mood: '期待', tags: ['小计划'], style: { page_key: demoPages[1]!.page_key, hidden: 'true' }, place_labels: [], x: 57, y: 52, width: 28, height: 22, rotation: 3, z_index: 3, created_at: '', updated_at: '' },
       { id: 'offline-cafe-image', collection_id: collection.id, event_id: events[1]!.id, kind: 'image', title: '雨落在旧街的窗上', body: '咖啡馆放着很轻的爵士乐，三张明信片写了很久。', emoji: '☕', mood: '安静', tags: ['雨天', '明信片'], style: { page_key: demoPages[2]!.page_key, text_position: 'right', frame: 'free' }, media_url: 'demo-cafe', place_labels: ['旧街咖啡馆'], x: 9, y: 14, width: 58, height: 45, rotation: 1, z_index: 1, created_at: '', updated_at: '' },
       { id: 'offline-cafe-note', collection_id: collection.id, event_id: events[1]!.id, kind: 'sticker', title: '写给未来的我', body: '别急着把每一天过成答案，允许旅途中有一整个下午只是听雨。', emoji: '✉️', mood: '治愈', tags: ['手写'], style: { page_key: demoPages[2]!.page_key }, place_labels: [], x: 58, y: 57, width: 31, height: 27, rotation: -3, z_index: 2, created_at: '', updated_at: '' },
+      { id: 'offline-cafe-note-two', collection_id: collection.id, event_id: events[1]!.id, kind: 'note', title: '第三张没有寄出的明信片', body: '写到最后只留下一句：雨停以后，城市会把人慢慢送回自己身边。', emoji: '🖋️', mood: '安静', tags: ['明信片', '雨天'], style: { page_key: demoPages[2]!.page_key }, place_labels: ['旧街咖啡馆'], x: 10, y: 64, width: 39, height: 23, rotation: -1, z_index: 3, created_at: '', updated_at: '' },
       { id: 'offline-ticket-image', collection_id: collection.id, event_id: events[2]!.id, kind: 'image', title: '返程车票', body: '车开出站时，湖面在窗外闪了一下。', emoji: '🎫', mood: '想念', tags: ['返程', '票根'], style: { page_key: demoPages[3]!.page_key, text_position: 'overlay', frame: 'polaroid' }, media_url: 'demo-ticket', place_labels: ['东站'], x: 18, y: 17, width: 50, height: 45, rotation: -4, z_index: 1, created_at: '', updated_at: '' },
+      { id: 'offline-return-note', collection_id: collection.id, event_id: events[2]!.id, kind: 'note', title: '把日落夹进行李箱', body: '返程前没有再拍照，只把那段橙色和车票夹进了这本手账。', emoji: '🧡', mood: '想念', tags: ['返程', '纪念'], style: { page_key: demoPages[3]!.page_key }, place_labels: ['东站'], x: 60, y: 22, width: 30, height: 26, rotation: 3, z_index: 2, created_at: '', updated_at: '' },
       { id: 'offline-free-note', collection_id: collection.id, kind: 'note', title: '旅行带回来的小东西', body: '车票、咖啡店印章、没有寄出的明信片，以及一段还没写完的话。', emoji: '🧳', mood: '珍藏', tags: ['碎片'], style: { page_key: demoPages[4]!.page_key }, place_labels: [], x: 24, y: 22, width: 45, height: 34, rotation: 1, z_index: 1, created_at: '', updated_at: '' },
     ],
   }
@@ -871,6 +947,7 @@ async function publishComposition() {
           occurred_at: occurredAt.value || null,
           place_label: placeLabel.value || null,
           title_hint: titleHint.value || null,
+          emoji_hint: stickerChoice.value || null,
           style: { page_key: targetPage },
           ...layoutFor(0, 'note'),
         },
@@ -922,6 +999,12 @@ function clearComposer() {
   photoCaption.value = ''
 }
 async function addSticker() {
+  // A selected emoji belongs to the next text/photo by default. Creating a
+  // second visual object only makes sense when the composer is otherwise empty.
+  if (message.value.trim() || stagedMedia.value.length) {
+    notice.value = `已选 ${stickerChoice.value}，会附在这次图文上墙，不会额外生成第二张贴纸。`
+    return
+  }
   if (!selectedCollectionId.value) return
   busy.value = true
   try {
@@ -958,6 +1041,7 @@ async function addSticker() {
 }
 function beginDrag(block: Block, event: PointerEvent) {
   if ((event.target as HTMLElement).closest('button,input,textarea,select,.resize-handle')) return
+  contextMenu.value = undefined
   dragging.value = { id: block.id, startX: event.clientX, startY: event.clientY, x: block.x, y: block.y }
 }
 function beginResize(block: Block, event: PointerEvent) {
@@ -1027,6 +1111,7 @@ async function patchBlock(block: Block, changes: Record<string, unknown>) {
 }
 function openBlock(block: Block) {
   selectedBlock.value = { ...block, style: { ...block.style } }
+  contextMenu.value = undefined
   showChat.value = false
   showProfileMenu.value = false
 }
@@ -1507,7 +1592,7 @@ function scrollWorld(id: string) {
 
         <section v-else ref="wallStage" class="wall-stage">
           <div class="immersive-toolbar"><div><small>{{ selectedCollection?.title }}</small><strong>{{ currentPage?.title }}</strong></div><span>第 {{ pageIndex + 1 }} / {{ pages.length }} 页</span><button @click="toggleFullscreen">退出沉浸</button></div>
-          <div class="zoom-controls"><button @click="setZoom(zoom-.1)">−</button><span>{{ Math.round(zoom*100) }}%</span><button @click="setZoom(zoom+.1)">＋</button><button v-if="zoom!==1||panX||panY" @click="resetCanvasView">适合</button><small>放大后拖动画布，滚轮平移，Ctrl＋滚轮缩放</small></div>
+          <div class="zoom-controls"><button @click="setZoom(zoom-.1)">−</button><span>{{ Math.round(zoom*100) }}%</span><button @click="setZoom(zoom+.1)">＋</button><button v-if="zoom!==1||panX||panY" @click="resetCanvasView">适合</button><small>普通滚轮阅读页面 · Ctrl/⌘＋滚轮缩放 · Shift＋拖动或中键平移</small></div>
           <div ref="wallViewport" class="wall-viewport" :class="{pannable:zoom>1,panning:Boolean(panning)}" @wheel="handleCanvasWheel" @pointerdown="beginCanvasPan" @pointermove="movePointer" @pointerup="endPointer" @pointerleave="endPointer">
             <button v-if="pages.length>1" class="page-turn previous" aria-label="上一页" @click="turnPage(-1)"><span>‹</span><small>上一页</small></button>
             <Transition name="sheet" mode="out-in">
@@ -1518,6 +1603,8 @@ function scrollWorld(id: string) {
                 :style="{transform:`translate3d(${panX}px,${panY}px,0) scale(${zoom})`}"
                 @dragover.prevent
                 @drop.prevent="dropReelBlock"
+                @click="closeCanvasOverlays"
+                @contextmenu.prevent="contextMenu=undefined"
               >
                 <div v-if="currentPage?.page_type==='cover'" class="page-chapter cover-page"><small>PRIVATE SCRAPBOOK</small><h2>{{ selectedCollection?.title }}</h2><p>{{ selectedCollection?.description || '一本只属于你的记忆手账' }}</p><span>{{ new Date(selectedCollection?.created_at || Date.now()).getFullYear() }}</span></div>
                 <div v-else-if="currentPage?.page_type==='back'" class="page-chapter back-page"><span>✦</span><h2>{{ currentPage.title }}</h2><p>故事还会继续，下一次打开时仍可以从任意一页补充。</p></div>
@@ -1528,9 +1615,11 @@ function scrollWorld(id: string) {
                   :class="['memory-block',`kind-${block.kind}`,`text-${textPosition(block)}`,`frame-${block.style?.frame||'free'}`,{selected:selectedBlock?.id===block.id,dragging:dragging?.id===block.id,resizing:resizing?.id===block.id}]"
                   :style="{left:`${block.x}%`,top:`${block.y}%`,width:`${block.width}%`,height:`${block.height}%`,transform:`rotate(${block.rotation}deg)`,zIndex:block.z_index,'--card-scale':cardScale(block)}"
                   @pointerdown="beginDrag(block,$event)"
-                  @click="openBlock(block)"
+                  @click.stop="openBlock(block)"
+                  @contextmenu.prevent.stop="openBlockMenu(block,$event)"
                 >
-                  <div v-if="block.kind==='image' && mediaUrl(block.media_url)" class="block-media" @dblclick.stop="openPreview(block)"><img :src="mediaUrl(block.media_url)" :alt="block.title||'记忆照片'"></div>
+                  <div v-if="block.kind==='image' && mediaUrl(block.media_url)" class="block-media" :style="{filter:block.style?.filter||'none'}" @dblclick.stop="openPreview(block)"><img :src="mediaUrl(block.media_url)" :alt="block.title||'记忆照片'"></div>
+                  <div v-else-if="block.kind==='image'" class="block-media media-placeholder"><span>{{ block.emoji || '▧' }}</span><small>图片正在载入</small></div>
                   <div class="block-content">
                     <div class="block-content-inner">
                       <div class="block-kicker"><span>{{ block.emoji || (block.kind==='image'?'◌':'✦') }}</span><small v-if="block.mood">{{ block.mood }}</small></div>
@@ -1681,14 +1770,24 @@ function scrollWorld(id: string) {
       </section>
     </main>
 
-    <aside v-if="selectedBlock" :class="['editor-float',editorSide]" :style="{width:`${editorWidth}px`,height:`min(${editorHeight}px, calc(100vh - 125px))`}">
+    <aside v-if="selectedBlock" :class="['editor-float',editorSide]" :style="{width:`${editorWidth}px`,height:`min(${editorHeight}px, calc(100vh - 125px))`}" @pointerdown.stop>
       <header><div><small>LIVE CANVAS EDITOR</small><strong>在画布旁修改</strong></div><div class="dock-controls"><button :title="editorSide==='left'?'固定到右侧':'固定到左侧'" @click="toggleEditorSide">⇄</button><button @click="selectedBlock=undefined">×</button></div></header>
       <label>标题<input v-model="selectedBlock.title" placeholder="具体、可检索的标题"></label>
       <label>正文<textarea v-model="selectedBlock.body" rows="5"/></label>
       <div class="editor-two"><label>心情<input v-model="selectedBlock.mood"></label><label>表情<input v-model="selectedBlock.emoji" maxlength="8"></label></div>
       <label v-if="selectedBlock.kind==='image'">文字位置<select v-model="selectedBlock.style.text_position"><option value="bottom">图片下方</option><option value="top">图片上方</option><option value="left">图片左侧</option><option value="right">图片右侧</option><option value="overlay">叠在图片上</option><option value="hidden">隐藏文字</option></select></label>
+      <div v-if="selectedBlock.kind==='image'" class="editor-two"><label>图片效果<select v-model="selectedBlock.style.filter"><option value="none">自然</option><option value="saturate(1.25) contrast(1.06)">鲜明</option><option value="sepia(.38) saturate(1.12)">暖胶片</option><option value="grayscale(1) contrast(1.08)">黑白</option><option value="brightness(1.08) contrast(.9)">柔雾</option></select></label><label>图片操作<button class="soft-action compact-action" @click="openReplacePicker">替换图片</button></label></div>
+      <input ref="replaceFileInput" class="visually-hidden" type="file" accept="image/*" @change="replaceBlockMedia">
       <details class="editor-preferences"><summary>编辑面板大小与停靠</summary><label>面板宽度<input v-model.number="editorWidth" type="range" min="290" max="520" @change="persistUiPreferences"><span>{{ editorWidth }}px</span></label><label>面板高度<input v-model.number="editorHeight" type="range" min="420" max="820" @change="persistUiPreferences"><span>{{ editorHeight }}px</span></label><small>这项设置对所有卡片生效，并随当前账号保存。</small></details>
-      <footer><button v-if="selectedBlock.media_url" class="soft-action" @click="openPreview(selectedBlock)">放大原图</button><button class="primary-action" @click="saveBlock">保存修改</button></footer>
+      <footer><button v-if="selectedBlock.media_url" class="soft-action" @click="openPreview(selectedBlock)">放大原图</button><button class="soft-action" @click="rotateBlock(selectedBlock,5)">旋转 5°</button><button class="danger-action" @click="deleteBlock(selectedBlock)">移除卡片</button><button class="primary-action" @click="saveBlock">保存修改</button></footer>
+    </aside>
+
+    <aside v-if="contextMenu" class="canvas-context-menu" :style="{left:`${contextMenu.x}px`,top:`${contextMenu.y}px`}" @pointerdown.stop>
+      <strong>{{ contextMenu.block.title || '这张卡片' }}</strong>
+      <button @click="openBlock(contextMenu!.block)">编辑卡片</button><button @click="raiseBlock(contextMenu!.block)">置于最前</button>
+      <div><button @click="rotateBlock(contextMenu!.block,-5)">↶ 旋转</button><button @click="rotateBlock(contextMenu!.block,5)">↷ 旋转</button></div>
+      <button @click="toggleBlockHidden(contextMenu!.block,contextMenu!.block.style?.hidden!=='true');contextMenu=undefined">{{ contextMenu.block.style?.hidden==='true'?'恢复到本页':'暂时隐藏' }}</button>
+      <button class="menu-danger" @click="deleteBlock(contextMenu!.block)">移除卡片</button>
     </aside>
 
     <section v-if="previewBlock" class="overlay preview-overlay" @click.self="previewBlock=undefined">
@@ -1792,4 +1891,9 @@ button,small,strong,h1,h2,h3,p,span,blockquote{overflow-wrap:anywhere}
 .graph-canvas{max-width:100%;overflow:hidden}
 }
 .groups-create{align-items:end}.groups-create>button{justify-self:start}.groups-layout{display:grid;grid-template-columns:minmax(180px,.38fr) 1fr;gap:16px}.group-list{display:grid;align-content:start;gap:7px}.group-list button{display:grid;gap:4px;border:1px solid #ded2c1;border-radius:14px;padding:13px;background:#fff;color:#50655b;text-align:left;cursor:pointer}.group-list button.active{border-color:#285746;background:#e9f1e9;color:#285746}.group-list small,.group-detail small{color:#81786c;font-size:.72rem}.group-detail{display:grid;gap:14px;padding:17px;border:1px solid #ded2c1;border-radius:18px;background:#fffefa}.group-detail>header,.group-section>header{display:flex;justify-content:space-between;gap:12px;align-items:center}.group-detail>header h3{margin:5px 0 0;font:700 1.35rem 'Noto Serif SC'}.group-detail>header>span{color:#8a765c;font-size:.75rem}.group-invite{align-items:end}.group-invite>button{justify-self:start}.group-section{display:grid;gap:8px}.group-section h4{margin:0;font-size:.9rem}.group-section article{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 12px;border:1px solid #ebe2d6;border-radius:12px;background:#faf6ee}.group-section article strong,.group-section article small{display:block}.group-section article small{margin-top:3px}.muted{margin:0;color:#8b8378;font-size:.78rem}@media(max-width:820px){.groups-layout{grid-template-columns:1fr}.groups-create,.group-invite{grid-template-columns:1fr}.groups-create>button,.group-invite>button{width:100%}}
+
+/* Canvas editor pass: preserve the page scroll, make every card a miniature,
+   and offer the same core actions through mouse, touch and keyboard-visible UI. */
+.wall-viewport{overflow:hidden;touch-action:pan-y}.memory-wall{overflow:hidden}.memory-block{isolation:isolate;contain:layout paint}.block-content,.block-content-inner{overflow:hidden!important}.block-content-inner{min-height:0}.memory-block h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.memory-block p{min-height:0;-webkit-line-clamp:4}.kind-image .block-media{min-height:0}.media-placeholder{display:grid;place-content:center;gap:5px;background:linear-gradient(135deg,#dce9e1,#99b5a6)!important;color:#234c3d}.media-placeholder span{font-size:2rem}.media-placeholder small{font-size:.65rem}.compact-action{width:100%;padding:10px 12px;border:1px solid #d9ccba;background:#f7f1e7}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;clip-path:inset(50%)}.canvas-context-menu{position:fixed;z-index:60;display:grid;gap:3px;width:208px;padding:9px;border:1px solid #d8c8b1;border-radius:15px;background:#fffdf9;box-shadow:0 20px 45px #19342838;animation:context-in .16s ease}.canvas-context-menu strong{padding:5px 7px;overflow:hidden;color:#536157;font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.canvas-context-menu button{border:0;border-radius:9px;padding:8px 9px;background:transparent;text-align:left;color:#315d4b;cursor:pointer;font-size:.78rem}.canvas-context-menu button:hover{background:#eef3ed}.canvas-context-menu>div{display:grid;grid-template-columns:1fr 1fr;gap:3px}.canvas-context-menu .menu-danger{color:#a04942}.canvas-context-menu .menu-danger:hover{background:#f7e8e5}.page-heading>div:first-child,.section-heading>div:first-child{min-width:0}.page-heading h1,.section-heading h1{max-width:100%;overflow-wrap:anywhere;text-wrap:balance}.global-brand strong{max-width:min(260px,30vw)}.editor-float footer .danger-action{padding:10px 11px;font-size:.72rem}@keyframes context-in{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
+@media(max-width:820px){.canvas-context-menu{left:10px!important;right:10px;top:auto!important;bottom:78px;width:auto;grid-template-columns:1fr 1fr}.canvas-context-menu strong{grid-column:1/-1}.canvas-context-menu>div{grid-column:1/-1}.canvas-context-menu .menu-danger{grid-column:1/-1}.memory-block p{-webkit-line-clamp:3}.editor-float footer .danger-action{order:3}.page-heading h1,.section-heading h1{font-size:clamp(1.8rem,9vw,2.5rem)}}
 </style>
