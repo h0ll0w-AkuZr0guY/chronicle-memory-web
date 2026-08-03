@@ -1466,7 +1466,7 @@ function scrollWorld(id: string) {
     </section>
   </main>
 
-  <div v-else class="application">
+  <div v-else class="application" @pointerdown="closeCanvasOverlays">
     <header class="global-header">
       <button class="global-brand" @click="activeView='wall'">
         <span>{{ (profile?.display_name || currentUser?.display_name || 'MY').slice(0, 2).toUpperCase() }}</span>
