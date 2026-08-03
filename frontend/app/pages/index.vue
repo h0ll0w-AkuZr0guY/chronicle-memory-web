@@ -184,6 +184,7 @@ const searchQuery = ref('')
 const searchHits = ref<Array<{ title: string; excerpt: string; matched_by: string[]; rank_components?: Record<string, number> }>>([])
 const dragging = ref<{ id: string; startX: number; startY: number; x: number; y: number }>()
 const resizing = ref<{ id: string; startX: number; startY: number; width: number; height: number }>()
+const rotating = ref<{ id: string; centerX: number; centerY: number; startAngle: number; rotation: number }>()
 const selectedBlock = ref<Block>()
 const editorSide = ref<'left' | 'right'>('left')
 const editorWidth = ref(330)
@@ -205,7 +206,7 @@ const panX = ref(0)
 const panY = ref(0)
 const panning = ref<{ startX: number; startY: number; x: number; y: number }>()
 const reelDragBlockId = ref('')
-const contextMenu = ref<{ block: Block; x: number; y: number }>()
+const contextMenu = ref<{ block?: Block; x: number; y: number }>()
 const isImmersive = ref(false)
 const coach = ref<Coach>()
 const narrativePerspective = ref<'daily' | 'event' | 'stage' | 'world'>('daily')
@@ -258,7 +259,41 @@ function demoAsset(name: string) { return `${config.app.baseURL || '/'}demo/${na
 function cardScale(block: Block) {
   // Keep a small card as a true miniature. The previous lower bound kept the
   // text at near full size and produced an unusable inner scrollbar.
-  return clamp(Math.min(block.width / 34, block.height / 28), .46, 1)
+  return clamp(Math.min(block.width / 34, block.height / 28), .38, 1)
+}
+function imageFilter(block: Block) {
+  if (block.style?.filter && block.style.filter !== 'none') return block.style.filter
+  const brightness = Number(block.style?.brightness || 100)
+  const contrast = Number(block.style?.contrast || 100)
+  const saturation = Number(block.style?.saturation || 100)
+  const warmth = Number(block.style?.warmth || 0)
+  return `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%) sepia(${Math.max(0, warmth)}%) hue-rotate(${Math.min(0, warmth) * .35}deg)`
+}
+function imageTransform(block: Block) {
+  const scale = clamp(Number(block.style?.image_zoom || 100), 100, 220) / 100
+  return `scale(${scale})`
+}
+function imagePosition(block: Block) {
+  return `${clamp(Number(block.style?.image_x || 50), 0, 100)}% ${clamp(Number(block.style?.image_y || 50), 0, 100)}%`
+}
+function cardTextStyle(block: Block) {
+  return {
+    color: block.style?.text_color || '',
+    background: block.style?.text_background || '',
+  }
+}
+function editableBlock(block: Block): Block {
+  return {
+    ...block,
+    style: {
+      image_zoom: '100', image_x: '50', image_y: '50',
+      text_color: '#20382f', text_background: '#fff7df',
+      ...block.style,
+    },
+  }
+}
+function displayBlock(block: Block) {
+  return selectedBlock.value?.id === block.id ? selectedBlock.value : block
 }
 function resetCanvasView() {
   zoom.value = 1
@@ -276,15 +311,22 @@ function handleCanvasWheel(event: WheelEvent) {
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault()
     setZoom(zoom.value + (event.deltaY < 0 ? .1 : -.1))
-  } else if (event.shiftKey && zoom.value > 1) {
-    // Shift + wheel is the deliberate canvas-pan gesture. Plain wheel is
-    // intentionally left to the browser so the page remains readable.
+  } else if (zoom.value > 1) {
     event.preventDefault()
-    panX.value -= event.deltaY || event.deltaX
+    if (event.shiftKey) panX.value -= event.deltaY || event.deltaX
+    else {
+      panX.value -= event.deltaX
+      panY.value -= event.deltaY
+    }
+  } else {
+    // An overflow-hidden canvas otherwise swallows the wheel in several
+    // WebViews. Forward a normal wheel to the document explicitly.
+    event.preventDefault()
+    window.scrollBy({ top: event.deltaY, left: event.deltaX, behavior: 'auto' })
   }
 }
 function beginCanvasPan(event: PointerEvent) {
-  if (zoom.value <= 1 || (event.target as HTMLElement).closest('.memory-block,.page-turn,button,input,textarea,select') || (event.button !== 1 && !event.shiftKey)) return
+  if (zoom.value <= 1 || (event.target as HTMLElement).closest('.memory-block,.page-turn,button,input,textarea,select') || ![0, 1].includes(event.button)) return
   event.preventDefault()
   panning.value = { startX: event.clientX, startY: event.clientY, x: panX.value, y: panY.value }
 }
@@ -293,8 +335,11 @@ function closeCanvasOverlays() {
   selectedBlock.value = undefined
 }
 function openBlockMenu(block: Block, event: MouseEvent) {
-  selectedBlock.value = { ...block, style: { ...block.style } }
+  selectedBlock.value = editableBlock(block)
   contextMenu.value = { block, x: clamp(event.clientX, 12, window.innerWidth - 220), y: clamp(event.clientY, 12, window.innerHeight - 280) }
+}
+function openCanvasMenu(event: MouseEvent) {
+  contextMenu.value = { x: clamp(event.clientX, 12, window.innerWidth - 220), y: clamp(event.clientY, 12, window.innerHeight - 250) }
 }
 function raiseBlock(block: Block) {
   const zIndex = Math.max(1, ...allBlocks.value.map(item => item.z_index)) + 1
@@ -302,7 +347,7 @@ function raiseBlock(block: Block) {
   void patchBlock(block, { z_index: zIndex })
 }
 function rotateBlock(block: Block, delta: number) {
-  block.rotation = clamp(block.rotation + delta, -20, 20)
+  block.rotation = clamp(block.rotation + delta, -180, 180)
   void patchBlock(block, { rotation: block.rotation })
 }
 async function deleteBlock(block: Block) {
@@ -323,6 +368,12 @@ async function deleteBlock(block: Block) {
   }
 }
 function openReplacePicker() { replaceFileInput.value?.click() }
+async function openReplaceFromPreview() {
+  if (!previewBlock.value) return
+  selectedBlock.value = editableBlock(previewBlock.value)
+  await nextTick()
+  openReplacePicker()
+}
 async function replaceBlockMedia(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   const block = selectedBlock.value
@@ -331,9 +382,12 @@ async function replaceBlockMedia(event: Event) {
   if (isOffline.value) {
     const key = `offline-replaced-${Date.now()}`
     mediaUrls[key] = URL.createObjectURL(file)
+    const current = allBlocks.value.find(item => item.id === block.id)
+    if (current) current.media_url = key
     block.media_url = key
     block.body = block.body || file.name
-    await patchBlock(block, { body: block.body })
+    selectedBlock.value = { ...block, style: { ...block.style } }
+    if (previewBlock.value?.id === block.id) previewBlock.value = { ...block, style: { ...block.style } }
     notice.value = '已替换离线预览图片。'
     return
   }
@@ -349,7 +403,8 @@ async function replaceBlockMedia(event: Event) {
     }
     const index = allBlocks.value.findIndex(item => item.id === updated.id)
     if (index >= 0 && detail.value) detail.value.blocks[index] = updated
-    selectedBlock.value = { ...updated, style: { ...updated.style } }
+    selectedBlock.value = editableBlock(updated)
+    if (previewBlock.value?.id === updated.id) previewBlock.value = editableBlock(updated)
     notice.value = '图片已替换；旧照片仍作为可追溯素材保留。'
   } catch {
     notice.value = '图片替换失败，请检查文件后重试。'
@@ -902,7 +957,7 @@ async function publishComposition() {
   try {
     if (isOffline.value && detail.value) {
       const targetPage = selectedPageKey.value || 'undated'
-      if (message.value.trim()) {
+      if (message.value.trim() && !stagedMedia.value.length) {
         const layout = layoutFor(0, 'note')
         detail.value.blocks.push({
           id: `offline-note-${Date.now()}`, collection_id: selectedCollectionId.value, kind: 'note',
@@ -918,7 +973,7 @@ async function publishComposition() {
         detail.value!.blocks.push({
           id: key, collection_id: selectedCollectionId.value, kind: 'image',
           title: photoCaption.value || staged.name, body: message.value || '在浏览器里临时预览这张照片。',
-          emoji: '◌', mood: mood.value, tags: ['刚刚上传'], style: { page_key: targetPage, text_position: 'bottom', frame: layoutPreset.value },
+          emoji: stickerChoice.value || '◌', mood: mood.value, tags: ['刚刚上传'], style: { page_key: targetPage, text_position: 'bottom', frame: layoutPreset.value },
           media_url: key, place_labels: placeLabel.value ? [placeLabel.value] : [], ...layout,
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         })
@@ -937,7 +992,7 @@ async function publishComposition() {
     }
     let anchorEventId = ''
     const targetPage = selectedPageKey.value || 'undated'
-    if (message.value.trim()) {
+    if (message.value.trim() && !stagedMedia.value.length) {
       const entry = await $fetch<{ event?: { id: string } }>(api(`/v1/collections/${selectedCollectionId.value}/entries`), {
         method: 'POST',
         headers: authHeaders(),
@@ -965,7 +1020,10 @@ async function publishComposition() {
       Object.entries(layout).forEach(([key, value]) => form.append(key, String(value)))
       form.append('style_json', JSON.stringify({ frame: layoutPreset.value, staged_count: String(stagedMedia.value.length), page_key: targetPage, text_position: 'bottom' }))
       if (anchorEventId) form.append('event_id', anchorEventId)
-      await $fetch(api(`/v1/collections/${selectedCollectionId.value}/media`), { method: 'POST', headers: authHeaders(), body: form })
+      const uploaded = await $fetch<Block>(api(`/v1/collections/${selectedCollectionId.value}/media`), { method: 'POST', headers: authHeaders(), body: form })
+      // One photo establishes the event; the rest of the same composition
+      // join it without creating duplicate note cards or duplicate events.
+      if (!anchorEventId) anchorEventId = uploaded.event_id || ''
     }
     await selectCollection(selectedCollectionId.value)
     selectedPageKey.value = targetPage
@@ -1047,6 +1105,20 @@ function beginDrag(block: Block, event: PointerEvent) {
 function beginResize(block: Block, event: PointerEvent) {
   resizing.value = { id: block.id, startX: event.clientX, startY: event.clientY, width: block.width, height: block.height }
 }
+function beginRotate(block: Block, event: PointerEvent) {
+  if (!wall.value) return
+  const target = (event.currentTarget as HTMLElement).closest('.memory-block') as HTMLElement | null
+  const rect = target?.getBoundingClientRect()
+  if (!rect) return
+  event.preventDefault()
+  rotating.value = {
+    id: block.id,
+    centerX: rect.left + rect.width / 2,
+    centerY: rect.top + rect.height / 2,
+    startAngle: Math.atan2(event.clientY - (rect.top + rect.height / 2), event.clientX - (rect.left + rect.width / 2)) * 180 / Math.PI,
+    rotation: block.rotation,
+  }
+}
 function movePointer(event: PointerEvent) {
   if (panning.value) {
     panX.value = panning.value.x + event.clientX - panning.value.startX
@@ -1055,6 +1127,16 @@ function movePointer(event: PointerEvent) {
   }
   if (!wall.value) return
   const rect = wall.value.getBoundingClientRect()
+  if (rotating.value) {
+    const block = allBlocks.value.find(item => item.id === rotating.value?.id)
+    if (block) {
+      const angle = Math.atan2(event.clientY - rotating.value.centerY, event.clientX - rotating.value.centerX) * 180 / Math.PI
+      const raw = rotating.value.rotation + angle - rotating.value.startAngle
+      block.rotation = Math.round(clamp(raw, -180, 180))
+      if (selectedBlock.value?.id === block.id) selectedBlock.value.rotation = block.rotation
+    }
+    return
+  }
   if (dragging.value) {
     const block = allBlocks.value.find(item => item.id === dragging.value?.id)
     if (block) {
@@ -1065,16 +1147,22 @@ function movePointer(event: PointerEvent) {
   if (resizing.value) {
     const block = allBlocks.value.find(item => item.id === resizing.value?.id)
     if (block) {
-      block.width = clamp(resizing.value.width + ((event.clientX - resizing.value.startX) / rect.width) * 100, 18, 90)
-      block.height = clamp(resizing.value.height + ((event.clientY - resizing.value.startY) / rect.height) * 100, 16, 90)
+      block.width = clamp(resizing.value.width + ((event.clientX - resizing.value.startX) / rect.width) * 100, 20, 90)
+      block.height = clamp(resizing.value.height + ((event.clientY - resizing.value.startY) / rect.height) * 100, 18, 90)
+      if (selectedBlock.value?.id === block.id) {
+        selectedBlock.value.width = block.width
+        selectedBlock.value.height = block.height
+      }
     }
   }
 }
 async function endPointer() {
   const activeDrag = dragging.value
   const activeResize = resizing.value
+  const activeRotate = rotating.value
   dragging.value = undefined
   resizing.value = undefined
+  rotating.value = undefined
   panning.value = undefined
   if (activeDrag) {
     const block = allBlocks.value.find(item => item.id === activeDrag.id)
@@ -1083,6 +1171,10 @@ async function endPointer() {
   if (activeResize) {
     const block = allBlocks.value.find(item => item.id === activeResize.id)
     if (block) await patchBlock(block, { width: block.width, height: block.height })
+  }
+  if (activeRotate) {
+    const block = allBlocks.value.find(item => item.id === activeRotate.id)
+    if (block) await patchBlock(block, { rotation: block.rotation })
   }
 }
 async function patchBlock(block: Block, changes: Record<string, unknown>) {
@@ -1110,7 +1202,7 @@ async function patchBlock(block: Block, changes: Record<string, unknown>) {
   }
 }
 function openBlock(block: Block) {
-  selectedBlock.value = { ...block, style: { ...block.style } }
+  selectedBlock.value = editableBlock(block)
   contextMenu.value = undefined
   showChat.value = false
   showProfileMenu.value = false
@@ -1131,7 +1223,16 @@ async function dropReelBlock(event: DragEvent) {
 }
 function openPreview(block: Block) {
   previewScale.value = 1
-  previewBlock.value = block
+  previewBlock.value = editableBlock(block)
+}
+async function savePreviewEdits() {
+  if (!previewBlock.value) return
+  await patchBlock(previewBlock.value, {
+    title: previewBlock.value.title,
+    body: previewBlock.value.body,
+    style: previewBlock.value.style,
+  })
+  notice.value = '图片说明与非破坏性画面效果已保存。'
 }
 async function saveBlock() {
   if (!selectedBlock.value) return
@@ -1604,7 +1705,7 @@ function scrollWorld(id: string) {
                 @dragover.prevent
                 @drop.prevent="dropReelBlock"
                 @click="closeCanvasOverlays"
-                @contextmenu.prevent="contextMenu=undefined"
+                @contextmenu.prevent.stop="openCanvasMenu"
               >
                 <div v-if="currentPage?.page_type==='cover'" class="page-chapter cover-page"><small>PRIVATE SCRAPBOOK</small><h2>{{ selectedCollection?.title }}</h2><p>{{ selectedCollection?.description || '一本只属于你的记忆手账' }}</p><span>{{ new Date(selectedCollection?.created_at || Date.now()).getFullYear() }}</span></div>
                 <div v-else-if="currentPage?.page_type==='back'" class="page-chapter back-page"><span>✦</span><h2>{{ currentPage.title }}</h2><p>故事还会继续，下一次打开时仍可以从任意一页补充。</p></div>
@@ -1612,22 +1713,23 @@ function scrollWorld(id: string) {
                 <article
                   v-for="block in visiblePageBlocks"
                   :key="block.id"
-                  :class="['memory-block',`kind-${block.kind}`,`text-${textPosition(block)}`,`frame-${block.style?.frame||'free'}`,{selected:selectedBlock?.id===block.id,dragging:dragging?.id===block.id,resizing:resizing?.id===block.id}]"
-                  :style="{left:`${block.x}%`,top:`${block.y}%`,width:`${block.width}%`,height:`${block.height}%`,transform:`rotate(${block.rotation}deg)`,zIndex:block.z_index,'--card-scale':cardScale(block)}"
+                  :class="['memory-block',`kind-${block.kind}`,`text-${textPosition(displayBlock(block))}`,`frame-${displayBlock(block).style?.frame||'free'}`,{selected:selectedBlock?.id===block.id,dragging:dragging?.id===block.id,resizing:resizing?.id===block.id}]"
+                  :style="{left:`${block.x}%`,top:`${block.y}%`,width:`${displayBlock(block).width}%`,height:`${displayBlock(block).height}%`,transform:`rotate(${displayBlock(block).rotation}deg)`,zIndex:block.z_index,'--card-scale':cardScale(displayBlock(block))}"
                   @pointerdown="beginDrag(block,$event)"
                   @click.stop="openBlock(block)"
                   @contextmenu.prevent.stop="openBlockMenu(block,$event)"
                 >
-                  <div v-if="block.kind==='image' && mediaUrl(block.media_url)" class="block-media" :style="{filter:block.style?.filter||'none'}" @dblclick.stop="openPreview(block)"><img :src="mediaUrl(block.media_url)" :alt="block.title||'记忆照片'"></div>
-                  <div v-else-if="block.kind==='image'" class="block-media media-placeholder"><span>{{ block.emoji || '▧' }}</span><small>图片正在载入</small></div>
-                  <div class="block-content">
+                  <div v-if="block.kind==='image' && mediaUrl(displayBlock(block).media_url)" class="block-media" @dblclick.stop="openPreview(displayBlock(block))"><img :style="{filter:imageFilter(displayBlock(block)),transform:imageTransform(displayBlock(block)),objectPosition:imagePosition(displayBlock(block))}" :src="mediaUrl(displayBlock(block).media_url)" :alt="displayBlock(block).title||'记忆照片'"></div>
+                  <div v-else-if="block.kind==='image'" class="block-media media-placeholder"><span>{{ displayBlock(block).emoji || '▧' }}</span><small>图片正在载入</small></div>
+                  <div class="block-content" :style="cardTextStyle(displayBlock(block))">
                     <div class="block-content-inner">
-                      <div class="block-kicker"><span>{{ block.emoji || (block.kind==='image'?'◌':'✦') }}</span><small v-if="block.mood">{{ block.mood }}</small></div>
-                      <h3>{{ block.title || '未命名便签' }}</h3>
-                      <p>{{ block.ai_note || block.body }}</p>
-                      <div class="chips"><span v-for="place in block.place_labels" :key="place">⌖ {{ place }}</span><span v-for="tag in block.tags" :key="tag">#{{ tag }}</span></div>
+                      <div class="block-kicker"><span>{{ displayBlock(block).emoji || (block.kind==='image'?'◌':'✦') }}</span><small v-if="displayBlock(block).mood">{{ displayBlock(block).mood }}</small></div>
+                      <h3>{{ displayBlock(block).title || '未命名便签' }}</h3>
+                      <p>{{ displayBlock(block).ai_note || displayBlock(block).body }}</p>
+                      <div class="chips"><span v-for="place in displayBlock(block).place_labels" :key="place">⌖ {{ place }}</span><span v-for="tag in displayBlock(block).tags" :key="tag">#{{ tag }}</span></div>
                     </div>
                   </div>
+                  <button v-if="selectedBlock?.id===block.id" class="rotation-handle" aria-label="拖动旋转卡片" title="拖动旋转" @pointerdown.stop="beginRotate(block,$event)"><span>↻</span></button>
                   <button class="resize-handle" aria-label="调整卡片大小" @pointerdown.stop="beginResize(block,$event)">↘</button>
                 </article>
               </section>
@@ -1639,7 +1741,7 @@ function scrollWorld(id: string) {
         <section v-if="!pageOverview && currentPageBlocks.length" class="card-reel" aria-label="当前页卡片管理">
           <header><div><small>PAGE OBJECTS</small><strong>当前页的卡片胶片</strong></div><span>拖到画布即可恢复和重新摆放</span></header>
           <div class="reel-track">
-            <article v-for="block in currentPageBlocks" :key="block.id" :class="{hidden:block.style?.hidden==='true',active:selectedBlock?.id===block.id}" draggable="true" @dragstart="beginReelDrag(block)" @click="block.style?.hidden==='true' ? toggleBlockHidden(block,false) : openBlock(block)">
+            <article v-for="block in currentPageBlocks" :key="block.id" :class="{hidden:block.style?.hidden==='true',active:selectedBlock?.id===block.id}" draggable="true" @dragstart="beginReelDrag(block)" @click="block.style?.hidden==='true' ? toggleBlockHidden(block,false) : openBlock(block)" @contextmenu.prevent.stop="openBlockMenu(block,$event)">
               <div class="reel-preview"><img v-if="block.kind==='image'&&mediaUrl(block.media_url)" :src="mediaUrl(block.media_url)" :alt="block.title"><span v-else>{{ block.emoji||'✦' }}</span></div>
               <div><strong>{{ block.title||'未命名卡片' }}</strong><small>{{ block.style?.hidden==='true'?'已隐藏 · 点击恢复':`${Math.round(block.width)}×${Math.round(block.height)} · ${block.rotation}°` }}</small></div>
               <button :aria-label="block.style?.hidden==='true'?'恢复卡片':'隐藏卡片'" @click.stop="toggleBlockHidden(block,block.style?.hidden!=='true')">{{ block.style?.hidden==='true'?'◉':'◌' }}</button>
@@ -1777,21 +1879,31 @@ function scrollWorld(id: string) {
       <div class="editor-two"><label>心情<input v-model="selectedBlock.mood"></label><label>表情<input v-model="selectedBlock.emoji" maxlength="8"></label></div>
       <label v-if="selectedBlock.kind==='image'">文字位置<select v-model="selectedBlock.style.text_position"><option value="bottom">图片下方</option><option value="top">图片上方</option><option value="left">图片左侧</option><option value="right">图片右侧</option><option value="overlay">叠在图片上</option><option value="hidden">隐藏文字</option></select></label>
       <div v-if="selectedBlock.kind==='image'" class="editor-two"><label>图片效果<select v-model="selectedBlock.style.filter"><option value="none">自然</option><option value="saturate(1.25) contrast(1.06)">鲜明</option><option value="sepia(.38) saturate(1.12)">暖胶片</option><option value="grayscale(1) contrast(1.08)">黑白</option><option value="brightness(1.08) contrast(.9)">柔雾</option></select></label><label>图片操作<button class="soft-action compact-action" @click="openReplacePicker">替换图片</button></label></div>
+      <details v-if="selectedBlock.kind==='image'" class="image-adjustments" open><summary>画面与文字框</summary><label>图片缩放<input v-model="selectedBlock.style.image_zoom" type="range" min="100" max="220"><span>{{ selectedBlock.style.image_zoom||100 }}%</span></label><label>横向焦点<input v-model="selectedBlock.style.image_x" type="range" min="0" max="100"><span>{{ selectedBlock.style.image_x||50 }}%</span></label><label>纵向焦点<input v-model="selectedBlock.style.image_y" type="range" min="0" max="100"><span>{{ selectedBlock.style.image_y||50 }}%</span></label><div class="editor-two color-fields"><label>文字颜色<input v-model="selectedBlock.style.text_color" type="color"></label><label>文字框底色<input v-model="selectedBlock.style.text_background" type="color"></label></div></details>
       <input ref="replaceFileInput" class="visually-hidden" type="file" accept="image/*" @change="replaceBlockMedia">
       <details class="editor-preferences"><summary>编辑面板大小与停靠</summary><label>面板宽度<input v-model.number="editorWidth" type="range" min="290" max="520" @change="persistUiPreferences"><span>{{ editorWidth }}px</span></label><label>面板高度<input v-model.number="editorHeight" type="range" min="420" max="820" @change="persistUiPreferences"><span>{{ editorHeight }}px</span></label><small>这项设置对所有卡片生效，并随当前账号保存。</small></details>
       <footer><button v-if="selectedBlock.media_url" class="soft-action" @click="openPreview(selectedBlock)">放大原图</button><button class="soft-action" @click="rotateBlock(selectedBlock,5)">旋转 5°</button><button class="danger-action" @click="deleteBlock(selectedBlock)">移除卡片</button><button class="primary-action" @click="saveBlock">保存修改</button></footer>
     </aside>
 
     <aside v-if="contextMenu" class="canvas-context-menu" :style="{left:`${contextMenu.x}px`,top:`${contextMenu.y}px`}" @pointerdown.stop>
-      <strong>{{ contextMenu.block.title || '这张卡片' }}</strong>
-      <button @click="openBlock(contextMenu!.block)">编辑卡片</button><button @click="raiseBlock(contextMenu!.block)">置于最前</button>
-      <div><button @click="rotateBlock(contextMenu!.block,-5)">↶ 旋转</button><button @click="rotateBlock(contextMenu!.block,5)">↷ 旋转</button></div>
-      <button @click="toggleBlockHidden(contextMenu!.block,contextMenu!.block.style?.hidden!=='true');contextMenu=undefined">{{ contextMenu.block.style?.hidden==='true'?'恢复到本页':'暂时隐藏' }}</button>
-      <button class="menu-danger" @click="deleteBlock(contextMenu!.block)">移除卡片</button>
+      <template v-if="contextMenu.block">
+        <strong>{{ contextMenu.block.title || '这张卡片' }}</strong>
+        <button @click="openBlock(contextMenu.block)">编辑卡片</button><button @click="raiseBlock(contextMenu.block);contextMenu=undefined">置于最前</button>
+        <div><button @click="rotateBlock(contextMenu.block!,-5)">↶ 旋转 5°</button><button @click="rotateBlock(contextMenu.block!,5)">↷ 旋转 5°</button></div>
+        <button v-if="contextMenu.block.kind==='image'" @click="openPreview(contextMenu.block);contextMenu=undefined">放大与编辑图片</button>
+        <button @click="toggleBlockHidden(contextMenu.block!,contextMenu.block!.style?.hidden!=='true');contextMenu=undefined">{{ contextMenu.block.style?.hidden==='true'?'恢复到本页':'暂时隐藏' }}</button>
+        <button class="menu-danger" @click="deleteBlock(contextMenu.block!)">移除卡片</button>
+      </template>
+      <template v-else>
+        <strong>当前手账页</strong>
+        <button @click="showComposer=true;contextMenu=undefined">＋ 新建图文记忆</button>
+        <button @click="openPhotoPicker();contextMenu=undefined">▧ 选择照片</button>
+        <button @click="resetCanvasView();contextMenu=undefined">适合窗口</button>
+      </template>
     </aside>
 
     <section v-if="previewBlock" class="overlay preview-overlay" @click.self="previewBlock=undefined">
-      <article><header><div><small>ORIGINAL IMAGE</small><h2>{{ previewBlock.title }}</h2></div><button @click="previewBlock=undefined">×</button></header><div class="preview-tools"><button @click="previewScale=clamp(previewScale-.25,.5,4)">−</button><span>{{ Math.round(previewScale*100) }}%</span><button @click="previewScale=clamp(previewScale+.25,.5,4)">＋</button><button @click="previewScale=1">适合窗口</button></div><div class="image-zoom-surface"><img v-if="mediaUrl(previewBlock.media_url)" :style="{transform:`scale(${previewScale})`}" :src="mediaUrl(previewBlock.media_url)" :alt="previewBlock.title||'原图'"></div><p>{{ previewBlock.body }}</p></article>
+      <article><header><div><small>IMAGE STUDIO · NON-DESTRUCTIVE</small><h2>{{ previewBlock.title }}</h2></div><button @click="previewBlock=undefined">×</button></header><div class="preview-tools"><button @click="previewScale=clamp(previewScale-.25,.5,4)">−</button><span>{{ Math.round(previewScale*100) }}%</span><button @click="previewScale=clamp(previewScale+.25,.5,4)">＋</button><button @click="previewScale=1">适合窗口</button><button @click="openReplaceFromPreview">替换原图</button></div><div class="preview-workspace"><div class="image-zoom-surface"><img v-if="mediaUrl(previewBlock.media_url)" :style="{transform:`scale(${previewScale}) ${imageTransform(previewBlock)}`,filter:imageFilter(previewBlock),objectPosition:imagePosition(previewBlock)}" :src="mediaUrl(previewBlock.media_url)" :alt="previewBlock.title||'原图'"></div><aside class="preview-editor"><label>图片标题<input v-model="previewBlock.title"></label><label>图片说明<textarea v-model="previewBlock.body" rows="4"/></label><label>滤镜<select v-model="previewBlock.style.filter"><option value="none">自然</option><option value="saturate(1.25) contrast(1.06)">鲜明</option><option value="sepia(.38) saturate(1.12)">暖胶片</option><option value="grayscale(1) contrast(1.08)">黑白</option><option value="brightness(1.08) contrast(.9)">柔雾</option></select></label><div class="editor-two color-fields"><label>文字颜色<input v-model="previewBlock.style.text_color" type="color"></label><label>文字框<input v-model="previewBlock.style.text_background" type="color"></label></div><button class="primary-action" @click="savePreviewEdits">保存图片卡</button></aside></div></article>
     </section>
 
     <aside v-if="showChat" class="chat-drawer">
@@ -1896,4 +2008,10 @@ button,small,strong,h1,h2,h3,p,span,blockquote{overflow-wrap:anywhere}
    and offer the same core actions through mouse, touch and keyboard-visible UI. */
 .wall-viewport{overflow:hidden;touch-action:pan-y}.memory-wall{overflow:hidden}.memory-block{isolation:isolate;contain:layout paint}.block-content,.block-content-inner{overflow:hidden!important}.block-content-inner{min-height:0}.memory-block h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.memory-block p{min-height:0;-webkit-line-clamp:4}.kind-image .block-media{min-height:0}.media-placeholder{display:grid;place-content:center;gap:5px;background:linear-gradient(135deg,#dce9e1,#99b5a6)!important;color:#234c3d}.media-placeholder span{font-size:2rem}.media-placeholder small{font-size:.65rem}.compact-action{width:100%;padding:10px 12px;border:1px solid #d9ccba;background:#f7f1e7}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;clip-path:inset(50%)}.canvas-context-menu{position:fixed;z-index:60;display:grid;gap:3px;width:208px;padding:9px;border:1px solid #d8c8b1;border-radius:15px;background:#fffdf9;box-shadow:0 20px 45px #19342838;animation:context-in .16s ease}.canvas-context-menu strong{padding:5px 7px;overflow:hidden;color:#536157;font-size:.74rem;text-overflow:ellipsis;white-space:nowrap}.canvas-context-menu button{border:0;border-radius:9px;padding:8px 9px;background:transparent;text-align:left;color:#315d4b;cursor:pointer;font-size:.78rem}.canvas-context-menu button:hover{background:#eef3ed}.canvas-context-menu>div{display:grid;grid-template-columns:1fr 1fr;gap:3px}.canvas-context-menu .menu-danger{color:#a04942}.canvas-context-menu .menu-danger:hover{background:#f7e8e5}.page-heading>div:first-child,.section-heading>div:first-child{min-width:0}.page-heading h1,.section-heading h1{max-width:100%;overflow-wrap:anywhere;text-wrap:balance}.global-brand strong{max-width:min(260px,30vw)}.editor-float footer .danger-action{padding:10px 11px;font-size:.72rem}@keyframes context-in{from{opacity:0;transform:translateY(-4px) scale(.98)}to{opacity:1;transform:none}}
 @media(max-width:820px){.canvas-context-menu{left:10px!important;right:10px;top:auto!important;bottom:78px;width:auto;grid-template-columns:1fr 1fr}.canvas-context-menu strong{grid-column:1/-1}.canvas-context-menu>div{grid-column:1/-1}.canvas-context-menu .menu-danger{grid-column:1/-1}.memory-block p{-webkit-line-clamp:3}.editor-float footer .danger-action{order:3}.page-heading h1,.section-heading h1{font-size:clamp(1.8rem,9vw,2.5rem)}}
+
+/* Direct-manipulation canvas pass. Cards never grow an internal scrollbar:
+   their complete content coordinate system scales with the object. */
+.memory-block{min-width:0;min-height:0;overflow:visible}.memory-block>.block-media,.memory-block>.block-content{overflow:hidden}.block-media img{width:100%;height:100%;max-width:none;object-fit:cover;transform-origin:center;transition:filter .24s ease,transform .24s ease,object-position .24s ease}.block-content{transition:background .2s ease,color .2s ease}.rotation-handle{position:absolute;z-index:8;left:50%;top:-35px;display:grid;place-items:center;width:29px;height:29px;border:1px solid #c58e4f;border-radius:50%;background:#fffdf9;color:#285746;box-shadow:0 5px 15px #25362c2b;transform:translateX(-50%);cursor:grab}.rotation-handle:after{content:'';position:absolute;top:28px;width:1px;height:8px;background:#c58e4f}.rotation-handle:active{cursor:grabbing}.rotation-handle span{font-size:1rem;line-height:1}.image-adjustments{padding:10px 0;border-top:1px solid #e7ddcf}.image-adjustments summary{cursor:pointer;color:#52665c;font-size:.75rem;font-weight:700}.image-adjustments>label{display:grid;grid-template-columns:76px 1fr 42px;align-items:center;gap:7px;margin-top:9px}.image-adjustments input[type=range]{padding:0}.image-adjustments label>span{text-align:right;color:#8d8172;font-size:.65rem}.color-fields input[type=color]{width:100%;height:38px;padding:4px;cursor:pointer}.preview-overlay>article{width:min(1280px,96vw)}.preview-workspace{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:14px;min-height:0}.preview-editor{display:grid;align-content:start;gap:11px;padding:14px;border:1px solid #dfd2bf;border-radius:16px;background:#faf6ed}.preview-editor label{display:grid;gap:5px;color:#6f756c;font-size:.72rem}.preview-editor input,.preview-editor textarea,.preview-editor select{width:100%;border:1px solid #d9cbb7;border-radius:10px;padding:9px;background:#fff}.preview-editor textarea{resize:vertical}.preview-editor .primary-action{justify-self:start}.coach-ribbon{min-width:0;overflow:hidden}.coach-ribbon>button{min-width:0;max-width:260px}.coach-ribbon button strong,.coach-ribbon button small{max-width:100%;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}.page-heading h1,.section-heading h1{font-size:clamp(2.7rem,5.4vw,5.2rem);line-height:1.05;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:1200px){.coach-ribbon{overflow-x:auto;scrollbar-width:none}.coach-ribbon::-webkit-scrollbar{display:none}.coach-ribbon>button{flex:0 0 210px}}
+@media(max-width:820px){.rotation-handle{top:-27px;width:25px;height:25px}.rotation-handle:after{top:24px;height:5px}.preview-overlay{padding:7px}.preview-overlay>article{max-height:96dvh;padding:10px}.preview-workspace{grid-template-columns:1fr;overflow:auto}.image-zoom-surface{height:min(48vh,430px)}.preview-editor{grid-template-columns:1fr 1fr}.preview-editor>label:nth-child(-n+2),.preview-editor>.primary-action{grid-column:1/-1}.page-heading h1,.section-heading h1{white-space:normal;text-overflow:clip}}
 </style>
